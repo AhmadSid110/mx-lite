@@ -3,7 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+
 android {
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
+
+    ndk {
+        abiFilters += listOf("arm64-v8a", "x86_64")
+    }
+
     namespace = "com.mxlite.app"
     compileSdk = 34
 

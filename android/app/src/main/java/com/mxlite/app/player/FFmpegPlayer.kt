@@ -1,21 +1,34 @@
 
 package com.mxlite.app.player
 
-import android.net.Uri
-import android.view.Surface
-
 class FFmpegPlayer {
 
-    fun prepare(uri: Uri, surface: Surface) {
-        // Phase A: codec pack not installed
-        throw CodecPackMissingException()
-    }
+    external fun nativeOpen(path: String): Boolean
+    external fun nativeGetDurationMs(): Long
 
-    fun play() {}
-    fun pause() {}
-    fun release() {}
+    external fun nativeReadVideoFrame(): VideoFrame?
+    external fun nativeReadAudioFrame(): AudioFrame?
+
+    external fun nativeSeekTo(ms: Long)
+    external fun nativeClose()
+
+    companion object {
+        init {
+            System.loadLibrary("ffmpeg_jni")
+        }
+    }
 }
 
-class CodecPackMissingException : RuntimeException(
-    "Codec pack not installed"
+data class VideoFrame(
+    val width: Int,
+    val height: Int,
+    val ptsMs: Long,
+    val data: ByteArray
+)
+
+data class AudioFrame(
+    val sampleRate: Int,
+    val channels: Int,
+    val ptsMs: Long,
+    val pcm: ByteArray
 )
