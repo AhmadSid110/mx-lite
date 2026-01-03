@@ -23,7 +23,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun VideoSurface(useOpenGL: Boolean, onSurfaceReady: (Surface) -> Unit) {
     
+
 AndroidView(
+    modifier = Modifier
+        .fillMaxSize()
+        .aspectRatio(videoInfo.aspectRatio),
+
     modifier = GestureOverlay(vm),
 factory = { ctx ->
         SurfaceView(ctx).apply {
