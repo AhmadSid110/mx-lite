@@ -1,8 +1,11 @@
-package com.mxlite.app
+package com.mxlite.app.player
 
 import android.content.Context
 import android.net.Uri
 import android.view.Surface
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 
@@ -14,7 +17,7 @@ import kotlinx.coroutines.*
 
 class PlayerViewModel
 (private val context: Context) : ViewModel() {
-    private val player = MediaCodecPlayer(context)
+    private val engine = PlayerEngine(context)
     private var surface: Surface? = null
 
     fun onSurfaceReady(surface: Surface) {
@@ -68,4 +71,22 @@ Factory(private val context: Context) :
 
     fun seekBy(deltaMs: Long) {
         player.seekBy(deltaMs)
+    }
+
+
+    private val _showCodecDialog = MutableStateFlow(false)
+    val showCodecDialog: StateFlow<Boolean> = _showCodecDialog.asStateFlow()
+
+    fun play(uri: android.net.Uri) {
+        surface ?: return
+        try {
+            engine.prepare(uri, surface!!)
+            engine.play()
+        } catch (e: CodecException) {
+            _showCodecDialog.value = true
+        }
+    }
+
+    fun forceSoftware(enable: Boolean) {
+        engine.forceSoftware = enable
     }

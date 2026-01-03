@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 fun PlayerScreen(vm: PlayerViewModel) {
     
 var showBrowser by remember { mutableStateOf(false) }
+        }
 
 if (showBrowser) {
     FileBrowserScreen(
@@ -44,6 +45,11 @@ title = { Text("MX Lite") })
                 .weight(1f)
                 .fillMaxWidth()
         ) {
+            Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(GestureOverlay(vm))
+        ) {
             VideoSurface { surface ->
                 vm.onSurfaceReady(surface)
             }
@@ -54,6 +60,21 @@ title = { Text("MX Lite") })
                 vm.play(Uri.parse("/storage/emulated/0/Movies/sample.mp4"))
             },
             onPause = { vm.pause() }
+        )
+    }
+}
+
+@Composable
+fun CodecDialogHost(vm: com.mxlite.app.player.PlayerViewModel) {
+    val show by vm.showCodecDialog.collectAsState()
+
+    if (show) {
+        CodecDialog(
+            onInstall = { },
+            onUseSW = {
+                vm.forceSoftware(true)
+            },
+            onDismiss = { }
         )
     }
 }
