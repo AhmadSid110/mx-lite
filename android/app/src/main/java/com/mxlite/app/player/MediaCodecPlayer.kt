@@ -160,3 +160,10 @@ class MediaCodecPlayer(private val context: Context) {
         }
     }
 }
+
+
+    fun getCurrentPositionMs(): Long {
+        val track = audioTrack ?: return 0L
+        val sampleRate = 44100
+        return track.playbackHeadPosition * 1000L / sampleRate
+    }

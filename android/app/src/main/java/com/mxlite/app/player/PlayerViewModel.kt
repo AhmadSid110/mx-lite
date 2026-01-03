@@ -6,7 +6,14 @@ import android.view.Surface
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 
-class PlayerViewModel(private val context: Context) : ViewModel() {
+
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.*
+
+class PlayerViewModel
+(private val context: Context) : ViewModel() {
     private val player = MediaCodecPlayer(context)
     private var surface: Surface? = null
 
@@ -29,9 +36,31 @@ class PlayerViewModel(private val context: Context) : ViewModel() {
     }
 }
 
-class PlayerViewModelFactory(private val context: Context) :
+
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.*
+
+class PlayerViewModel
+Factory(private val context: Context) :
     ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return PlayerViewModel(context) as T
     }
 }
+
+    private val _positionMs = MutableStateFlow(0L)
+    val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
+
+    private var tickerJob: Job? = null
+
+    private fun startTicker() {
+        tickerJob?.cancel()
+        tickerJob = CoroutineScope(Dispatchers.Default).launch {
+            while (true) {
+                _positionMs.value = player.getCurrentPositionMs()
+                delay(500)
+            }
+        }
+    }
