@@ -14,7 +14,10 @@ fun PlayerScreen(vm: PlayerViewModel) {
 
     var resumeMs by remember { mutableStateOf<Long?>(null) }
     
+    
     var showResumeDialog by remember { mutableStateOf(false) }
+    var dontAskAgain by remember { mutableStateOf(false) }
+
     var dontAskAgain by remember { mutableStateOf(false) }
 
 
@@ -25,7 +28,13 @@ fun PlayerScreen(vm: PlayerViewModel) {
             resumeMs = pos
             
         if (ResumeStore.shouldAsk(context, activeTab.path)) {
+            
+        if (ResumeStore.shouldAsk(context, activeTab.path)) {
             showResumeDialog = true
+        } else {
+            playerController.seekTo(pos.toInt())
+        }
+
         } else {
             playerController.seekTo(pos.toInt())
         }
