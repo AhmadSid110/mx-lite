@@ -23,7 +23,21 @@ class PlayerController(
         }
     }
 
+    
+    fun switchAudioTrack(trackIndex: Int) {
+        audioThread?.shutdown()
+        audioThread = null
+
+        ffmpegPlayer.nativeSelectAudioStream(trackIndex)
+
+        // Seek to current audio clock position
+        ffmpegPlayer.nativeSeekTo(audioRenderer.getClockMs())
+
+        startPlayback()
+    }
+
     fun stopPlayback() {
+
         audioThread?.shutdown()
         videoThread?.shutdown()
 

@@ -14,7 +14,12 @@ class FFmpegPlayer {
     fun seekTo(ms: Long) {
         nativeSeekTo(ms)
     }
+    
+    external fun nativeGetAudioTracks(): Array<AudioTrackInfo>
+    external fun nativeSelectAudioStream(index: Int)
+    
     external fun nativeClose()
+
 
     companion object {
         init {
