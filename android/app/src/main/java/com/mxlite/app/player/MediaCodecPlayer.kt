@@ -167,3 +167,15 @@ class MediaCodecPlayer(private val context: Context) {
         val sampleRate = 44100
         return track.playbackHeadPosition * 1000L / sampleRate
     }
+
+
+    fun seekBy(deltaMs: Long) {
+        videoExtractor?.seekTo(
+            (getCurrentPositionMs() + deltaMs) * 1000,
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
+        audioExtractor?.seekTo(
+            (getCurrentPositionMs() + deltaMs) * 1000,
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
+    }

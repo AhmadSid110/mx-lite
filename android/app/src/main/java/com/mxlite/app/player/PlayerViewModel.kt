@@ -64,3 +64,8 @@ Factory(private val context: Context) :
             }
         }
     }
+
+
+    fun seekBy(deltaMs: Long) {
+        player.seekBy(deltaMs)
+    }

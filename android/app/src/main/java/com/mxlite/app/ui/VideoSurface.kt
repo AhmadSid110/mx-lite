@@ -8,7 +8,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 
 @Composable
 fun VideoSurface(onSurfaceReady: (Surface) -> Unit) {
-    AndroidView(factory = { ctx ->
+    
+AndroidView(
+    modifier = GestureOverlay(vm),
+factory = { ctx ->
         SurfaceView(ctx).apply {
             holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
