@@ -203,3 +203,28 @@ Java_com_mxlite_app_player_FFmpegPlayer_nativeClose(
     free(state);
     state = NULL;
 }
+
+
+JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_FFmpegPlayer_nativeSeekTo(
+        JNIEnv *env, jobject thiz, jlong positionMs) {
+
+    if (!state || !state->fmt) return;
+
+    int64_t target_us = positionMs * 1000;
+
+    av_seek_frame(
+        state->fmt,
+        -1,
+        target_us,
+        AVSEEK_FLAG_BACKWARD
+    );
+
+    if (state->acodec)
+        avcodec_flush_buffers(state->acodec);
+
+    if (state->vcodec)
+        avcodec_flush_buffers(state->vcodec);
+
+    state->audio_clock_us = target_us;
+}

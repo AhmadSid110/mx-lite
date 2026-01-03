@@ -10,6 +10,10 @@ class FFmpegPlayer {
     external fun nativeReadAudioFrame(): AudioFrame?
 
     external fun nativeSeekTo(ms: Long)
+
+    fun seekTo(ms: Long) {
+        nativeSeekTo(ms)
+    }
     external fun nativeClose()
 
     companion object {
