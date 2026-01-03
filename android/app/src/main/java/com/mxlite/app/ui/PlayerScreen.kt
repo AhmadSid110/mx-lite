@@ -11,6 +11,27 @@ import androidx.compose.ui.graphics.Color
 @Composable
 fun PlayerScreen(vm: PlayerViewModel) {
     val context = LocalContext.current
+
+    // Restore position on open
+    LaunchedEffect(activeTab.path) {
+        val resumeMs = ResumeStore.load(context, activeTab.path)
+        if (resumeMs > 0) {
+            playerController.seekTo(resumeMs.toInt())
+        }
+    }
+
+    // Save position on exit
+    DisposableEffect(activeTab.path) {
+        onDispose {
+            ResumeStore.save(
+                context,
+                activeTab.path,
+                audioRenderer.getClockMs()
+            )
+        }
+    }
+
+    val context = LocalContext.current
     var showCodecPackDialog by remember {
         mutableStateOf(false)
     }
