@@ -10,6 +10,11 @@ import androidx.compose.ui.graphics.Color
 
 @Composable
 fun PlayerScreen(vm: PlayerViewModel) {
+    val context = LocalContext.current
+    var showCodecPackDialog by remember {
+        mutableStateOf(false)
+    }
+
     val assRenderer = remember {
         runCatching {
             AssSubtitleRenderer("/storage/emulated/0/movie.ass")
