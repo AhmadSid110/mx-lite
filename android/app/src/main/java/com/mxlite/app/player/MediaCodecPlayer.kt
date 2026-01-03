@@ -16,6 +16,7 @@ class MediaCodecPlayer(private val context: Context) {
     private var audioCodec: MediaCodec? = null
 
     private var audioTrack: AudioTrack? = null
+    private var audioSampleRate = 44100
 
     @Volatile
     private var isPlaying = false
@@ -165,7 +166,7 @@ class MediaCodecPlayer(private val context: Context) {
     fun getCurrentPositionMs(): Long {
         val track = audioTrack ?: return 0L
         val sampleRate = 44100
-        return track.playbackHeadPosition * 1000L / sampleRate
+        return track.playbackHeadPosition * 1000L / audioSampleRate
     }
 
 
