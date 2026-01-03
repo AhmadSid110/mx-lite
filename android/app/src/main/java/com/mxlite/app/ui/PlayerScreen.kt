@@ -10,6 +10,18 @@ import androidx.compose.ui.graphics.Color
 
 @Composable
 fun PlayerScreen(vm: PlayerViewModel) {
+    val assRenderer = remember {
+        runCatching {
+            AssSubtitleRenderer("/storage/emulated/0/movie.ass")
+        }.getOrNull()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            assRenderer?.release()
+        }
+    }
+
     val subtitleTrack = remember {
         runCatching {
             SubtitleTrack(
