@@ -13,14 +13,23 @@ fun PlayerScreen(vm: PlayerViewModel) {
     val context = LocalContext.current
 
     var resumeMs by remember { mutableStateOf<Long?>(null) }
+    
     var showResumeDialog by remember { mutableStateOf(false) }
+    var dontAskAgain by remember { mutableStateOf(false) }
+
 
     // Load resume position on file/tab open
     LaunchedEffect(activeTab.path) {
         val pos = ResumeStore.load(context, activeTab.path)
         if (pos > 5_000) { // ignore tiny resumes
             resumeMs = pos
+            
+        if (ResumeStore.shouldAsk(context, activeTab.path)) {
             showResumeDialog = true
+        } else {
+            playerController.seekTo(pos.toInt())
+        }
+
         }
     }
 
