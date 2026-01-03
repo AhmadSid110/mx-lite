@@ -10,12 +10,34 @@ import androidx.compose.ui.graphics.Color
 
 @Composable
 fun PlayerScreen(vm: PlayerViewModel) {
-    Column(
+    
+var showBrowser by remember { mutableStateOf(false) }
+
+if (showBrowser) {
+    FileBrowserScreen(
+        context = vm.context,
+        vm = vm,
+        onClose = { showBrowser = false }
+    )
+    return
+}
+
+Column(
+
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        TopAppBar(title = { Text("MX Lite") })
+        
+TopAppBar(
+    title = { Text("MX Lite") },
+    actions = {
+        IconButton(onClick = { showBrowser = true }) {
+            Text("Browse")
+        }
+    }
+)
+title = { Text("MX Lite") })
 
         Box(
             modifier = Modifier
