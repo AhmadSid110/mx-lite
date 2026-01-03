@@ -21,12 +21,16 @@ class VideoFrameQueue(
     fun popForRender(audioClockMs: Long): VideoFrame? {
         val frame = queue.peek() ?: return null
 
+        
         return when {
-            frame.ptsMs <= audioClockMs -> queue.poll()
             frame.ptsMs < audioClockMs - dropThresholdMs -> {
-                queue.poll() // drop late
+                queue.poll() // drop late frame
                 null
             }
+            frame.ptsMs <= audioClockMs -> queue.poll() // render
+            else -> null // too early
+        }
+
             else -> null // too early
         }
     }
