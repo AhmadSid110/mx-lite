@@ -12,6 +12,31 @@ import androidx.compose.ui.graphics.Color
 fun PlayerScreen(vm: PlayerViewModel) {
     val context = LocalContext.current
 
+    var resumeMs by remember { mutableStateOf<Long?>(null) }
+    var showResumeDialog by remember { mutableStateOf(false) }
+
+    // Load resume position on file/tab open
+    LaunchedEffect(activeTab.path) {
+        val pos = ResumeStore.load(context, activeTab.path)
+        if (pos > 5_000) { // ignore tiny resumes
+            resumeMs = pos
+            showResumeDialog = true
+        }
+    }
+
+    // Save playback position on exit or tab switch
+    DisposableEffect(activeTab.path) {
+        onDispose {
+            ResumeStore.save(
+                context,
+                activeTab.path,
+                audioRenderer.getClockMs()
+            )
+        }
+    }
+
+    val context = LocalContext.current
+
     // Restore position on open
     LaunchedEffect(activeTab.path) {
         val resumeMs = ResumeStore.load(context, activeTab.path)
