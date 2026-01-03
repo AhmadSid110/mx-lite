@@ -1,5 +1,13 @@
 package com.mxlite.app
 
+import android.app.Activity
+
+import com.mxlite.app.player.AudioRenderer
+
+import com.mxlite.app.player.PlayerController
+
+import com.mxlite.app.player.PlayerGestureController
+
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -13,6 +21,17 @@ AndroidView(
     modifier = GestureOverlay(vm),
 factory = { ctx ->
         SurfaceView(ctx).apply {
+
+            setOnTouchListener(
+                PlayerGestureController(
+                    activity = ctx as Activity,
+                    playerController = playerController,
+                    getCurrentPositionMs = {
+                        audioRenderer.getClockMs()
+                    }
+                )
+            )
+
             holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
                     onSurfaceReady(holder.surface)
