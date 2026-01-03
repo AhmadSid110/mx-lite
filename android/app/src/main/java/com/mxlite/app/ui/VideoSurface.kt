@@ -1,5 +1,11 @@
 package com.mxlite.app
 
+import androidx.compose.runtime.rememberUpdatedState
+
+import androidx.compose.runtime.remember
+
+import com.mxlite.app.player.gl.GLVideoSurface
+
 import android.app.Activity
 
 import com.mxlite.app.player.AudioRenderer
@@ -15,7 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.viewinterop.AndroidView
 
 @Composable
-fun VideoSurface(onSurfaceReady: (Surface) -> Unit) {
+fun VideoSurface(useOpenGL: Boolean, onSurfaceReady: (Surface) -> Unit) {
     
 AndroidView(
     modifier = GestureOverlay(vm),
