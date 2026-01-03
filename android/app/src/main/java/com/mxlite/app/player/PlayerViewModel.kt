@@ -90,3 +90,23 @@ Factory(private val context: Context) :
     fun forceSoftware(enable: Boolean) {
         engine.forceSoftware = enable
     }
+
+
+    private val engine = PlayerEngine(context)
+
+    private val _showCodecDialog = MutableStateFlow(false)
+    val showCodecDialog = _showCodecDialog.asStateFlow()
+
+    fun play(uri: android.net.Uri) {
+        surface ?: return
+        try {
+            engine.prepare(uri, surface!!)
+            engine.play()
+        } catch (e: CodecPackMissingException) {
+            _showCodecDialog.value = true
+        }
+    }
+
+    fun useSoftwareDecoder() {
+        engine.forceSoftware = true
+    }

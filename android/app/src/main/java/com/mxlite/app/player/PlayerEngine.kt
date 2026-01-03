@@ -10,12 +10,13 @@ class PlayerEngine(private val context: Context) {
     var forceSoftware = false
 
     private var hw: MediaCodecPlayer? = null
-    private var sw: SoftwarePlayer? = null
+    private var sw: FFmpegPlayer? = null
 
     fun prepare(uri: Uri, surface: Surface) {
+        release()
+
         if (forceSoftware) {
-            sw = SoftwarePlayer()
-            sw!!.prepare(uri, surface)
+            startSoftware(uri, surface)
             return
         }
 
@@ -23,8 +24,16 @@ class PlayerEngine(private val context: Context) {
             hw = MediaCodecPlayer(context)
             hw!!.prepare(uri, surface)
         } catch (e: Exception) {
-            throw CodecException(e.message ?: "Unsupported codec")
+            startSoftware(uri, surface)
         }
+    }
+
+    private fun startSoftware(uri: Uri, surface: Surface) {
+        if (!CodecPack.isInstalled()) {
+            throw CodecPackMissingException()
+        }
+        sw = FFmpegPlayer()
+        sw!!.prepare(uri, surface)
     }
 
     fun play() {
@@ -40,7 +49,7 @@ class PlayerEngine(private val context: Context) {
     fun release() {
         hw?.release()
         sw?.release()
+        hw = null
+        sw = null
     }
 }
-
-class CodecException(msg: String) : RuntimeException(msg)
