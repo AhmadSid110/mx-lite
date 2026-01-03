@@ -10,6 +10,16 @@ import androidx.compose.ui.graphics.Color
 
 @Composable
 fun PlayerScreen(vm: PlayerViewModel) {
+    val subtitleTrack = remember {
+        runCatching {
+            SubtitleTrack(
+                SrtParser.parse(
+                    File("/storage/emulated/0/movie.srt")
+                )
+            )
+        }.getOrNull()
+    }
+
     
 var showBrowser by remember { mutableStateOf(false) }
         }
