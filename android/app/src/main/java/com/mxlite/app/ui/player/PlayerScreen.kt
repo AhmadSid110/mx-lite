@@ -3,6 +3,8 @@ package com.mxlite.app.ui.player
 import android.app.Activity
 import android.media.AudioManager
 import android.view.SurfaceView
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -30,8 +32,31 @@ fun PlayerScreen(
     val engine = remember { ExoPlayerEngine(context) }
     var controlsVisible by remember { mutableStateOf(true) }
 
+    fun enterFullscreen() {
+        activity.window.insetsController?.let {
+            it.hide(WindowInsets.Type.systemBars())
+            it.systemBarsBehavior =
+                WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    fun exitFullscreen() {
+        activity.window.insetsController?.show(
+            WindowInsets.Type.systemBars()
+        )
+    }
+
+    DisposableEffect(controlsVisible) {
+        if (controlsVisible) exitFullscreen() else enterFullscreen()
+        onDispose { }
+    }
+
     DisposableEffect(Unit) {
-        onDispose { engine.release() }
+        enterFullscreen()
+        onDispose {
+            exitFullscreen()
+            engine.release()
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -40,7 +65,10 @@ fun PlayerScreen(
             TopAppBar(
                 title = { Text(file.name) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        exitFullscreen()
+                        onBack()
+                    }) {
                         Text("←")
                     }
                 }
