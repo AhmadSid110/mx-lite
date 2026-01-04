@@ -1,79 +1,61 @@
 package com.mxlite.app.ui.player
 
-import androidx.compose.foundation.gestures.detectTapGestures
 import android.view.SurfaceView
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.mxlite.app.player.PlayerEngine
-import kotlin.math.abs
 import java.io.File
+import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     file: File,
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    var showControls by remember { mutableStateOf(true) }
-    var duration by remember { mutableStateOf(0L) }
-    var position by remember { mutableStateOf(0L) }
+    val context = LocalContext.current
 
-    // 🔁 Poll audio clock (SAFE)
+    // Timeline state
+    var positionMs by remember { mutableStateOf(0L) }
+    var durationMs by remember { mutableStateOf(0L) }
+
+    // Poll engine every 500ms (READ-ONLY)
     LaunchedEffect(Unit) {
         while (true) {
-            duration = engine.durationMs
-            position = engine.currentPositionMs
-            kotlinx.coroutines.delay(200)
+            positionMs = engine.currentPositionMs
+            durationMs = engine.durationMs
+            delay(500)
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragEnd = {},
-                    onDrag = { change, dragAmount ->
-                        // Horizontal seek
-                        if (abs(dragAmount.x) > abs(dragAmount.y)) {
-                            val deltaMs = (dragAmount.x * 50).toLong()
-                            engine.seekTo((position + deltaMs).coerceIn(0, duration))
-                        }
-                    }
-                )
-            }
-    ) {
-
-        if (showControls) {
-            TopAppBar(
-                title = { Text(file.name) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Text("←")
-                    }
-                }
-            )
+    DisposableEffect(Unit) {
+        onDispose {
+            engine.release()
         }
+    }
 
+    Column(modifier = Modifier.fillMaxSize()) {
+
+        // Top bar
+        TopAppBar(
+            title = { Text(file.name) },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Text("←")
+                }
+            }
+        )
+
+        // Video surface
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .pointerInput(Unit) {
-                    detectTapGestures {
-                        showControls = !showControls
-                    }
-                },
+                .weight(1f),
             factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.addCallback(
@@ -82,12 +64,14 @@ fun PlayerScreen(
                                 engine.attachSurface(holder.surface)
                                 engine.play(file)
                             }
+
                             override fun surfaceChanged(
                                 holder: android.view.SurfaceHolder,
                                 format: Int,
                                 width: Int,
                                 height: Int
                             ) {}
+
                             override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
                         }
                     )
@@ -95,28 +79,35 @@ fun PlayerScreen(
             }
         )
 
-        if (showControls) {
-            Column(modifier = Modifier.padding(12.dp)) {
+        // Timeline (READ-ONLY)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
 
-                Slider(
-                    value = if (duration > 0) position.toFloat() / duration else 0f,
-                    onValueChange = {
-                        engine.seekTo((it * duration).toLong())
-                    }
-                )
+            // Disabled progress bar
+            LinearProgressIndicator(
+                progress = if (durationMs > 0)
+                    positionMs.toFloat() / durationMs.toFloat()
+                else 0f,
+                modifier = Modifier.fillMaxWidth()
+            )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    Button(onClick = { engine.play(file) }) {
-                        Text("Play")
-                    }
-                    Button(onClick = { engine.pause() }) {
-                        Text("Pause")
-                    }
-                }
-            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Time text
+            Text(
+                text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
+}
+
+private fun formatTime(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d".format(minutes, seconds)
 }
