@@ -35,16 +35,16 @@ android {
 
 dependencies {
 
-    // --- Compose ---
+    // Compose
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
 
-    // --- DataStore (THIS WAS MISSING) ---
+    // ✅ DataStore (THIS WILL NOW RESOLVE)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
-    // --- Media ---
+    // Media
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
 }
