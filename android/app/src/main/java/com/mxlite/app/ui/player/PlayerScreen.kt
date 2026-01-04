@@ -1,49 +1,78 @@
 package com.mxlite.app.ui.player
 
 import android.view.SurfaceView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.mxlite.app.player.MediaCodecEngine
+import androidx.compose.ui.unit.dp
 import com.mxlite.app.player.PlayerEngine
+import kotlin.math.abs
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     file: File,
+    engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
+    var showControls by remember { mutableStateOf(true) }
+    var duration by remember { mutableStateOf(0L) }
+    var position by remember { mutableStateOf(0L) }
 
-    // 🔑 CRITICAL FIX: type as PlayerEngine
-    val engine: PlayerEngine = remember {
-        MediaCodecEngine()
+    // 🔁 Poll audio clock (SAFE)
+    LaunchedEffect(Unit) {
+        while (true) {
+            duration = engine.durationMs
+            position = engine.currentPositionMs
+            kotlinx.coroutines.delay(200)
+        }
     }
 
-    DisposableEffect(Unit) {
-        onDispose { engine.release() }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-
-        TopAppBar(
-            title = { Text(file.name) },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Text("←")
-                }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragEnd = {},
+                    onDrag = { change, dragAmount ->
+                        // Horizontal seek
+                        if (abs(dragAmount.x) > abs(dragAmount.y)) {
+                            val deltaMs = (dragAmount.x * 50).toLong()
+                            engine.seekTo((position + deltaMs).coerceIn(0, duration))
+                        }
+                    }
+                )
             }
-        )
+    ) {
+
+        if (showControls) {
+            TopAppBar(
+                title = { Text(file.name) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Text("←")
+                    }
+                }
+            )
+        }
 
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f)
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        showControls = !showControls
+                    }
+                },
             factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.addCallback(
@@ -65,28 +94,26 @@ fun PlayerScreen(
             }
         )
 
-        // --- Controls ---
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
+        if (showControls) {
+            Column(modifier = Modifier.padding(12.dp)) {
 
-            Slider(
-                value = engine.currentPositionMs.toFloat(),
-                valueRange = 0f..engine.durationMs.toFloat().coerceAtLeast(1f),
-                onValueChange = { engine.seekTo(it.toLong()) }
-            )
+                Slider(
+                    value = if (duration > 0) position.toFloat() / duration else 0f,
+                    onValueChange = {
+                        engine.seekTo((it * duration).toLong())
+                    }
+                )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Button(onClick = { engine.play(file) }) {
-                    Text("Play")
-                }
-                Button(onClick = { engine.pause() }) {
-                    Text("Pause")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    Button(onClick = { engine.play(file) }) {
+                        Text("Play")
+                    }
+                    Button(onClick = { engine.pause() }) {
+                        Text("Pause")
+                    }
                 }
             }
         }
