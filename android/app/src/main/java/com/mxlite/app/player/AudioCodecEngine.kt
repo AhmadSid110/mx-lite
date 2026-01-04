@@ -2,7 +2,7 @@ package com.mxlite.app.player
 
 /**
  * Audio engine is the MASTER clock.
- * Video must sync to this.
+ * Seek modifies the clock directly.
  */
 class AudioCodecEngine : PlaybackClock {
 
@@ -25,8 +25,12 @@ class AudioCodecEngine : PlaybackClock {
         playedSamples = 0
     }
 
+    fun seekTo(positionMs: Long) {
+        playedSamples = (positionMs * sampleRate) / 1000L
+    }
+
     /**
-     * Call this from audio decode loop
+     * Call from audio decode loop
      */
     fun onSamplesPlayed(samples: Int) {
         if (playing) {
