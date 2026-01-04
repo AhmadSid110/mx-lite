@@ -1,34 +1,38 @@
 package com.mxlite.app.ui.player
 
 import android.view.SurfaceView
-import android.view.SurfaceHolder
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mxlite.app.player.PlayerEngine
 import java.io.File
 import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     file: File,
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    // Timeline state
+    val context = LocalContext.current
+
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
 
-    // Poll engine every 500ms (READ-ONLY)
+    var userSeeking by remember { mutableStateOf(false) }
+    var seekPositionMs by remember { mutableStateOf(0L) }
+
+    // 🔄 Poll engine clock (authoritative)
     LaunchedEffect(Unit) {
         while (true) {
-            positionMs = engine.currentPositionMs
-            durationMs = engine.durationMs
+            if (!userSeeking) {
+                positionMs = engine.currentPositionMs
+                durationMs = engine.durationMs
+            }
             delay(500)
         }
     }
@@ -41,7 +45,7 @@ fun PlayerScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // Top bar
+        // ─── Top Bar ─────────────────────────────────────────────
         TopAppBar(
             title = { Text(file.name) },
             navigationIcon = {
@@ -51,7 +55,7 @@ fun PlayerScreen(
             }
         )
 
-        // Video surface
+        // ─── Video Surface ───────────────────────────────────────
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
@@ -59,43 +63,51 @@ fun PlayerScreen(
             factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.addCallback(
-                        object : SurfaceHolder.Callback {
-
-                            override fun surfaceCreated(holder: SurfaceHolder) {
+                        object : android.view.SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                                 engine.attachSurface(holder.surface)
                                 engine.play(file)
                             }
-
                             override fun surfaceChanged(
-                                holder: SurfaceHolder,
+                                holder: android.view.SurfaceHolder,
                                 format: Int,
                                 width: Int,
                                 height: Int
-                            ) = Unit
-
-                            override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
+                            ) {}
+                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
                         }
                     )
                 }
             }
         )
 
-        // Timeline (READ-ONLY)
+        // ─── Controls ────────────────────────────────────────────
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
 
-            LinearProgressIndicator(
-                progress = if (durationMs > 0)
-                    positionMs.toFloat() / durationMs.toFloat()
+            // 🎚 Seek Bar
+            Slider(
+                value = if (durationMs > 0)
+                    (if (userSeeking) seekPositionMs else positionMs).toFloat()
                 else 0f,
+                onValueChange = { value ->
+                    userSeeking = true
+                    seekPositionMs = value.toLong()
+                },
+                onValueChangeFinished = {
+                    engine.seekTo(seekPositionMs)
+                    userSeeking = false
+                },
+                valueRange = 0f..maxOf(durationMs.toFloat(), 1f),
                 modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // ⏱ Time Display
             Text(
                 text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
                 style = MaterialTheme.typography.bodyMedium
