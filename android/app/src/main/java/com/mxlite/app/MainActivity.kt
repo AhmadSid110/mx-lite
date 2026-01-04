@@ -3,16 +3,16 @@ package com.mxlite.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val vm: PlayerViewModel = viewModel(
-                factory = PlayerViewModelFactory(applicationContext)
-            )
-            PlayerScreen(vm)
+            MaterialTheme {
+                Text("MX Lite — Layer 1 OK")
+            }
         }
     }
 }
