@@ -1,25 +1,25 @@
 package com.mxlite.app.ui.player
 
 import android.view.SurfaceView
+import android.view.SurfaceHolder
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mxlite.app.player.PlayerEngine
 import java.io.File
 import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     file: File,
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
-
     // Timeline state
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -59,20 +59,21 @@ fun PlayerScreen(
             factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.addCallback(
-                        object : android.view.SurfaceHolder.Callback {
-                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                        object : SurfaceHolder.Callback {
+
+                            override fun surfaceCreated(holder: SurfaceHolder) {
                                 engine.attachSurface(holder.surface)
                                 engine.play(file)
                             }
 
                             override fun surfaceChanged(
-                                holder: android.view.SurfaceHolder,
+                                holder: SurfaceHolder,
                                 format: Int,
                                 width: Int,
                                 height: Int
-                            ) {}
+                            ) = Unit
 
-                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
+                            override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
                         }
                     )
                 }
@@ -86,7 +87,6 @@ fun PlayerScreen(
                 .padding(16.dp)
         ) {
 
-            // Disabled progress bar
             LinearProgressIndicator(
                 progress = if (durationMs > 0)
                     positionMs.toFloat() / durationMs.toFloat()
@@ -96,7 +96,6 @@ fun PlayerScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Time text
             Text(
                 text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
                 style = MaterialTheme.typography.bodyMedium
