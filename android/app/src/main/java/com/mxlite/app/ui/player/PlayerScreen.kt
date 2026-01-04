@@ -1,5 +1,6 @@
 package com.mxlite.app.ui.player
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import android.view.SurfaceView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
