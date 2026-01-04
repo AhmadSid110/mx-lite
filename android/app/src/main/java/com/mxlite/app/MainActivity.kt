@@ -1,14 +1,18 @@
 package com.mxlite.app
 
-import android.app.Activity
 import android.os.Bundle
-import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.material3.MaterialTheme
+import com.mxlite.app.ui.AppRoot
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val tv = TextView(this)
-        tv.text = "MX Lite Clean Baseline"
-        setContentView(tv)
+        setContent {
+            MaterialTheme {
+                AppRoot()
+            }
+        }
     }
 }
