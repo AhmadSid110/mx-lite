@@ -1,5 +1,6 @@
 package com.mxlite.app.ui.player
 
+import android.app.Activity
 import android.view.SurfaceView
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -21,7 +22,7 @@ fun PlayerScreen(
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
+    val activity = LocalContext.current as Activity
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -30,7 +31,19 @@ fun PlayerScreen(
     var userSeeking by remember { mutableStateOf(false) }
     var seekPositionMs by remember { mutableStateOf(0L) }
 
-    // Poll engine clock
+    // 🔒 Enter immersive + lock orientation
+    DisposableEffect(Unit) {
+        activity.enterImmersiveMode()
+        activity.lockLandscape()
+
+        onDispose {
+            activity.exitImmersiveMode()
+            activity.unlockOrientation()
+            engine.release()
+        }
+    }
+
+    // ⏱ Poll audio clock
     LaunchedEffect(Unit) {
         while (true) {
             if (!userSeeking) {
@@ -39,10 +52,6 @@ fun PlayerScreen(
             }
             delay(500)
         }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose { engine.release() }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -58,6 +67,7 @@ fun PlayerScreen(
             )
         }
 
+        // 🎥 Video Surface + Gestures
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
@@ -69,11 +79,13 @@ fun PlayerScreen(
                         },
                         onDoubleTap = { offset ->
                             val half = size.width / 2
-                            val delta = if (offset.x < half) -10_000 else 10_000
-                            val target =
+                            val delta =
+                                if (offset.x < half) -10_000 else 10_000
+
+                            engine.seekTo(
                                 (engine.currentPositionMs + delta)
                                     .coerceIn(0, engine.durationMs)
-                            engine.seekTo(target)
+                            )
                         }
                     )
                 },
@@ -98,6 +110,7 @@ fun PlayerScreen(
             }
         )
 
+        // 🎛 Controls
         if (controlsVisible) {
             Column(
                 modifier = Modifier
