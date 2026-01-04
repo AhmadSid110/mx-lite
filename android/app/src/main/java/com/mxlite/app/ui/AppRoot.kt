@@ -3,6 +3,7 @@ package com.mxlite.app.ui
 import androidx.compose.runtime.*
 import androidx.compose.material3.*
 import androidx.compose.ui.platform.LocalContext
+import com.mxlite.app.player.PlayerEngine
 import com.mxlite.app.player.ExoPlayerEngine
 import com.mxlite.app.ui.player.PlayerScreen
 import java.io.File
@@ -10,7 +11,12 @@ import java.io.File
 @Composable
 fun AppRoot() {
     val context = LocalContext.current
-    val engine = remember { ExoPlayerEngine(context) }
+
+    // 🔒 Step 4: UI depends ONLY on PlayerEngine
+    val engine: PlayerEngine = remember {
+        ExoPlayerEngine(context)
+        // later you can swap to MediaCodecEngine(context)
+    }
 
     var playingFile by remember { mutableStateOf<File?>(null) }
 
