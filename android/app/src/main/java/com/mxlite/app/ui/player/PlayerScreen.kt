@@ -12,6 +12,7 @@ import com.mxlite.app.player.PlayerEngine
 import java.io.File
 import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalMaterial3Api::class) // ✅ REQUIRED
 @Composable
 fun PlayerScreen(
     file: File,
@@ -45,7 +46,7 @@ fun PlayerScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // ─── Top Bar ─────────────────────────────────────────────
+        // ─── Top Bar ─────────────────────────────
         TopAppBar(
             title = { Text(file.name) },
             navigationIcon = {
@@ -55,7 +56,7 @@ fun PlayerScreen(
             }
         )
 
-        // ─── Video Surface ───────────────────────────────────────
+        // ─── Video Surface ───────────────────────
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
@@ -81,14 +82,13 @@ fun PlayerScreen(
             }
         )
 
-        // ─── Controls ────────────────────────────────────────────
+        // ─── Controls ────────────────────────────
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
 
-            // 🎚 Seek Bar
             Slider(
                 value = if (durationMs > 0)
                     (if (userSeeking) seekPositionMs else positionMs).toFloat()
@@ -107,7 +107,6 @@ fun PlayerScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // ⏱ Time Display
             Text(
                 text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
                 style = MaterialTheme.typography.bodyMedium
