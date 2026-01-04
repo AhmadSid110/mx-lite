@@ -102,6 +102,7 @@ class AudioCodecEngine {
                 outBuf.clear()
 
                 track.write(pcm, 0, pcm.size)
+                PlaybackClock.audioPositionMs = (track.playbackHeadPosition * 1000L) / sampleRate
                 codec.releaseOutputBuffer(outIndex, false)
             }
 

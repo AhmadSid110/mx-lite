@@ -70,6 +70,11 @@ class MediaCodecEngine : PlayerEngine {
 
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
             if (outIndex >= 0) {
+                val ptsMs = info.presentationTimeUs / 1000
+                while (running) {
+                    if (ptsMs <= PlaybackClock.audioPositionMs + 10) break
+                    Thread.sleep(1)
+                }
                 codec.releaseOutputBuffer(outIndex, true)
             }
 
