@@ -5,17 +5,15 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.view.Surface
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MediaCodecEngine : PlayerEngine {
-    private var durationUs: Long = 0
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
 
-    @Volatile
-    private var running = false
-
+    private val running = AtomicBoolean(false)
     private var decodeThread: Thread? = null
 
     override fun attachSurface(surface: Surface) {
@@ -24,25 +22,26 @@ class MediaCodecEngine : PlayerEngine {
 
     override fun play(file: File) {
         release()
-        running = true
+        running.set(true)
 
-        extractor = MediaExtractor().apply {
-            setDataSource(file.absolutePath)
-        }
+        decodeThread = Thread {
+            extractor = MediaExtractor().apply {
+                setDataSource(file.absolutePath)
+            }
 
-        val trackIndex = selectVideoTrack(extractor!!)
-        extractor!!.selectTrack(trackIndex)
+            val trackIndex = selectVideoTrack(extractor!!)
+            extractor!!.selectTrack(trackIndex)
 
-        val format = extractor!!.getTrackFormat(trackIndex)
-        durationUs = format.getLong(android.media.MediaFormat.KEY_DURATION)
-        val mime = format.getString(MediaFormat.KEY_MIME)!!
+            val format = extractor!!.getTrackFormat(trackIndex)
+            val mime = format.getString(MediaFormat.KEY_MIME)!!
 
-        codec = MediaCodec.createDecoderByType(mime).apply {
-            configure(format, surface, null, 0)
-            start()
-        }
+            codec = MediaCodec.createDecoderByType(mime).apply {
+                configure(format, surface, null, 0)
+                start()
+            }
 
-        decodeThread = Thread({ decodeLoop() }, "MediaCodecDecodeThread").apply { start() }
+            decodeLoop()
+        }.apply { start() }
     }
 
     private fun decodeLoop() {
@@ -50,7 +49,7 @@ class MediaCodecEngine : PlayerEngine {
         val extractor = extractor ?: return
         val info = MediaCodec.BufferInfo()
 
-        while (running) {
+        while (running.get()) {
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 val buffer = codec.getInputBuffer(inIndex)!!
@@ -61,6 +60,7 @@ class MediaCodecEngine : PlayerEngine {
                         inIndex, 0, 0, 0,
                         MediaCodec.BUFFER_FLAG_END_OF_STREAM
                     )
+                    break
                 } else {
                     codec.queueInputBuffer(
                         inIndex, 0, size,
@@ -72,35 +72,30 @@ class MediaCodecEngine : PlayerEngine {
 
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
             if (outIndex >= 0) {
-                val ptsMs = info.presentationTimeUs / 1000
-                while (running) {
-                    if (ptsMs <= PlaybackClock.audioPositionMs + 10) break
-                    Thread.sleep(1)
-                }
                 codec.releaseOutputBuffer(outIndex, true)
             }
-
-            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
         }
     }
 
-    override fun seekTo(positionMs: Long) {
-        extractor?.seekTo(positionMs * 1000, android.media.MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+    private fun selectVideoTrack(extractor: MediaExtractor): Int {
+        for (i in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+            if (mime.startsWith("video/")) return i
+        }
+        error("No video track found")
     }
 
-    override val durationMs: Long
-        get() = durationUs / 1000
-
-    override val currentPositionMs: Long
-        get() = PlaybackClock.audioPositionMs
-    override fun pause() { running = false }
+    override fun pause() {
+        running.set(false)
+    }
 
     override fun seekTo(positionMs: Long) {
         extractor?.seekTo(positionMs * 1000, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
     }
 
     override fun release() {
-        running = false
+        running.set(false)
         decodeThread?.join(200)
         decodeThread = null
 
@@ -112,7 +107,7 @@ class MediaCodecEngine : PlayerEngine {
         extractor = null
     }
 
-    override val durationMs: Long get() = 0
-    override val currentPositionMs: Long get() = 0
-    override val isPlaying: Boolean get() = running
+    override val durationMs: Long get() = 0L
+    override val currentPositionMs: Long get() = 0L
+    override val isPlaying: Boolean get() = running.get()
 }
