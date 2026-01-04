@@ -80,9 +80,19 @@ fun PlayerScreen(
                 .fillMaxWidth()
                 .weight(1f)
                 .pointerInput(Unit) {
-                    detectTapGestures {
-                        controlsVisible = !controlsVisible
-                    }
+                    detectTapGestures(
+                        onTap = {
+                            controlsVisible = !controlsVisible
+                        },
+                        onDoubleTap = { offset ->
+                            val half = size.width / 2
+                            val delta = if (offset.x < half) -10_000 else 10_000
+                            engine.seekTo(
+                                (engine.currentPositionMs + delta)
+                                    .coerceIn(0, engine.durationMs)
+                            )
+                        }
+                    )
                 }
                 .pointerInput(Unit) {
                     detectDragGestures { change, dragAmount ->
