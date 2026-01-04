@@ -3,26 +3,21 @@ package com.mxlite.app.ui
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import com.mxlite.app.ui.browser.FileBrowserScreen
+import com.mxlite.app.ui.player.PlayerScreen
+import java.io.File
 
 @Composable
 fun AppRoot() {
-    var tab by remember { mutableStateOf(0) }
+    var selectedFile by remember { mutableStateOf<File?>(null) }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(tab == 0, { tab = 0 }, { Text("Home") })
-                NavigationBarItem(tab == 1, { tab = 1 }, { Text("Files") })
-                NavigationBarItem(tab == 2, { tab = 2 }, { Text("Player") })
-                NavigationBarItem(tab == 3, { tab = 3 }, { Text("Settings") })
-            }
-        }
-    ) {
-        when (tab) {
-            0 -> Text("Home")
-            1 -> FileBrowserScreen { }
-            2 -> Text("Player")
-            3 -> Text("Settings")
-        }
+    if (selectedFile == null) {
+        FileBrowserScreen(
+            onFileSelected = { selectedFile = it }
+        )
+    } else {
+        PlayerScreen(
+            file = selectedFile!!,
+            onBack = { selectedFile = null }
+        )
     }
 }
