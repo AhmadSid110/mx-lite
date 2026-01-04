@@ -29,17 +29,18 @@ android {
 }
 
 dependencies {
-    // ---- Compose BOM ----
+    // Compose BOM
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
 
-    // ---- Core Compose ----
+    // Compose core
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.ui:ui")
-
-    // ---- Material 3 (REQUIRED for your theme) ----
     implementation("androidx.compose.material3:material3")
 
-    // ---- Media3 / ExoPlayer ----
+    // 🔥 REQUIRED FOR XML Material3 THEMES
+    implementation("com.google.android.material:material:1.11.0")
+
+    // Media
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
 }
