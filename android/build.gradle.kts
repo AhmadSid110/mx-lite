@@ -1,4 +1,43 @@
 plugins {
-    id("com.android.application") version "8.2.2" apply false
-    id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.mxlite.app"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.mxlite.app"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "0.1"
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.8"
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    // Compose BOM
+    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+
+    // Compose
+    implementation("androidx.activity:activity-compose")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+
+    // 🔴 MEDIA3 — REQUIRED
+    implementation("androidx.media3:media3-exoplayer:1.2.1")
+    implementation("androidx.media3:media3-ui:1.2.1")
 }
