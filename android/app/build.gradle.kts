@@ -35,28 +35,16 @@ android {
 
 dependencies {
 
-    // =============================
-    // Jetpack Compose (STABLE SET)
-    // =============================
+    // --- Compose ---
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
 
-    // =============================
-    // Media / Playback
-    // =============================
-    implementation("androidx.media3:media3-exoplayer:1.2.1")
-    implementation("androidx.media3:media3-ui:1.2.1")
-
-    // =============================
-    // DataStore (SAF + recents)
-    // =============================
+    // --- DataStore (THIS WAS MISSING) ---
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
-    // =============================
-    // Kotlin Coroutines (REQUIRED)
-    // =============================
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    // --- Media ---
+    implementation("androidx.media3:media3-exoplayer:1.2.1")
+    implementation("androidx.media3:media3-ui:1.2.1")
 }
