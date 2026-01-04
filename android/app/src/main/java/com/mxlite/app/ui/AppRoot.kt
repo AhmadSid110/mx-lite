@@ -1,23 +1,26 @@
 package com.mxlite.app.ui
 
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import com.mxlite.app.ui.browser.FileBrowserScreen
+import androidx.compose.material3.*
+import androidx.compose.ui.platform.LocalContext
+import com.mxlite.app.player.ExoPlayerEngine
 import com.mxlite.app.ui.player.PlayerScreen
 import java.io.File
 
 @Composable
 fun AppRoot() {
-    var selectedFile by remember { mutableStateOf<File?>(null) }
+    val context = LocalContext.current
+    val engine = remember { ExoPlayerEngine(context) }
 
-    if (selectedFile == null) {
-        FileBrowserScreen(
-            onFileSelected = { selectedFile = it }
+    var playingFile by remember { mutableStateOf<File?>(null) }
+
+    if (playingFile != null) {
+        PlayerScreen(
+            file = playingFile!!,
+            engine = engine,
+            onBack = { playingFile = null }
         )
     } else {
-        PlayerScreen(
-            file = selectedFile!!,
-            onBack = { selectedFile = null }
-        )
+        Text("Home (wire browser → player here)")
     }
 }
