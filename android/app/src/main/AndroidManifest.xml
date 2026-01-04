@@ -6,15 +6,14 @@
     <application
         android:allowBackup="false"
         android:label="MX Lite"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.MXLite">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
 
