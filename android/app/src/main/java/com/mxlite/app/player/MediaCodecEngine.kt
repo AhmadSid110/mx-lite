@@ -17,8 +17,10 @@ class MediaCodecEngine(
     private var running = false
 
     override val durationMs: Long = 0
+
     override val currentPositionMs: Long
         get() = clock.positionMs
+
     override val isPlaying: Boolean
         get() = running
 
@@ -56,6 +58,7 @@ class MediaCodecEngine(
         val info = MediaCodec.BufferInfo()
 
         while (running) {
+
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 val buffer = codec.getInputBuffer(inIndex)!!
@@ -68,8 +71,11 @@ class MediaCodecEngine(
                     )
                 } else {
                     codec.queueInputBuffer(
-                        inIndex, 0, size,
-                        extractor.sampleTime, 0
+                        inIndex,
+                        0,
+                        size,
+                        extractor.sampleTime,
+                        0
                     )
                     extractor.advance()
                 }
@@ -109,8 +115,15 @@ class MediaCodecEngine(
         running = false
     }
 
+    /**
+     * Video seek = keyframe reposition.
+     * Audio already jumped — PTS logic realigns.
+     */
     override fun seekTo(positionMs: Long) {
-        // implemented in D2-D+
+        extractor?.seekTo(
+            positionMs * 1000,
+            MediaExtractor.SEEK_TO_PREVIOUS_SYNC
+        )
     }
 
     override fun release() {
