@@ -6,20 +6,17 @@ plugins {
 
 android {
 
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-        }
+    
     }
 
-    ndk {
-        abiFilters += listOf("arm64-v8a", "x86_64")
-    }
+    
 
     namespace = "com.mxlite.app"
     compileSdk = 34
 
     defaultConfig {
+        
+
         applicationId = "com.mxlite.app"
         minSdk = 26
         targetSdk = 34
