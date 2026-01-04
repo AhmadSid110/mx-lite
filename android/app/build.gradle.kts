@@ -3,20 +3,11 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-
 android {
-
-    
-    }
-
-    
-
     namespace = "com.mxlite.app"
     compileSdk = 34
 
     defaultConfig {
-        
-
         applicationId = "com.mxlite.app"
         minSdk = 26
         targetSdk = 34
@@ -38,13 +29,17 @@ android {
 }
 
 dependencies {
+    // ---- Compose BOM ----
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+
+    // ---- Core Compose ----
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-}
 
-dependencies {
+    // ---- Material 3 (REQUIRED for your theme) ----
+    implementation("androidx.compose.material3:material3")
+
+    // ---- Media3 / ExoPlayer ----
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
 }
