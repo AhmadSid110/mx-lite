@@ -2,7 +2,7 @@
 <resources>
 
     <style name="Theme.MXLite" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Keep empty for now -->
+        <!-- Customize later -->
     </style>
 
 </resources>
