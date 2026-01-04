@@ -1,16 +1,18 @@
 package com.mxlite.app.ui.player
-import androidx.compose.material3.ExperimentalMaterial3Api
+
+import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.mxlite.app.player.ExoPlayerEngine
 import java.io.File
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     file: File,
@@ -43,18 +45,25 @@ fun PlayerScreen(
             factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.addCallback(
-                        object : android.view.SurfaceHolder.Callback {
-                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                        object : SurfaceHolder.Callback {
+
+                            override fun surfaceCreated(holder: SurfaceHolder) {
                                 engine.attachSurface(holder.surface)
                                 engine.play(file)
                             }
+
                             override fun surfaceChanged(
-                                holder: android.view.SurfaceHolder,
+                                holder: SurfaceHolder,
                                 format: Int,
                                 width: Int,
                                 height: Int
-                            ) {}
-                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
+                            ) {
+                                // no-op
+                            }
+
+                            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                // surface released in engine.release()
+                            }
                         }
                     )
                 }
