@@ -2,6 +2,7 @@ package com.mxlite.app.ui
 
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import com.mxlite.app.ui.browser.FileBrowserScreen
 
 @Composable
 fun AppRoot() {
@@ -19,7 +20,7 @@ fun AppRoot() {
     ) {
         when (tab) {
             0 -> Text("Home")
-            1 -> Text("Files")
+            1 -> FileBrowserScreen { }
             2 -> Text("Player")
             3 -> Text("Settings")
         }
