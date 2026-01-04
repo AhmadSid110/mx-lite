@@ -9,27 +9,16 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import java.io.File
 
-/**
- * Video-only ExoPlayer engine.
- * Audio disabled intentionally.
- */
 class ExoPlayerEngine(
     private val context: Context
 ) {
+
     private var player: ExoPlayer? = null
 
     private fun ensurePlayer() {
         if (player != null) return
 
-        val trackSelector = DefaultTrackSelector(context).apply {
-            setParameters(
-                buildUponParameters()
-                    .setTrackTypeDisabled(
-                        androidx.media3.common.C.TRACK_TYPE_AUDIO,
-                        true
-                    )
-            )
-        }
+        val trackSelector = DefaultTrackSelector(context)
 
         player = ExoPlayer.Builder(context)
             .setTrackSelector(trackSelector)
@@ -47,11 +36,9 @@ class ExoPlayerEngine(
     fun play(file: File) {
         ensurePlayer()
         val item = MediaItem.fromUri(Uri.fromFile(file))
-        player?.apply {
-            setMediaItem(item)
-            prepare()
-            play()
-        }
+        player?.setMediaItem(item)
+        player?.prepare()
+        player?.play()
     }
 
     fun pause() {
