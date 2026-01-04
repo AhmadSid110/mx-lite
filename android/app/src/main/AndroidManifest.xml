@@ -7,15 +7,17 @@
         android:allowBackup="false"
         android:label="MX Lite"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Material3.DayNight.NoActionBar">
+        android:theme="@style/Theme.MXLite">
 
         <activity
             android:name=".MainActivity"
             android:exported="true">
+            
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
         </activity>
 
     </application>
