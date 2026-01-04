@@ -11,7 +11,11 @@ class MediaCodecEngine : PlayerEngine {
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
+
+    @Volatile
     private var running = false
+
+    private var decodeThread: Thread? = null
 
     override fun attachSurface(surface: Surface) {
         this.surface = surface
@@ -36,7 +40,7 @@ class MediaCodecEngine : PlayerEngine {
             start()
         }
 
-        decodeLoop()
+        decodeThread = Thread({ decodeLoop() }, "MediaCodecDecodeThread").apply { start() }
     }
 
     private fun decodeLoop() {
@@ -45,7 +49,6 @@ class MediaCodecEngine : PlayerEngine {
         val info = MediaCodec.BufferInfo()
 
         while (running) {
-
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 val buffer = codec.getInputBuffer(inIndex)!!
@@ -74,23 +77,21 @@ class MediaCodecEngine : PlayerEngine {
         }
     }
 
-    private fun selectVideoTrack(extractor: MediaExtractor): Int {
-        for (i in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(i)
-            val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-            if (mime.startsWith("video/")) return i
-        }
-        error("No video track found")
-    }
+    override fun pause() { running = false }
 
-    override fun pause() {}
-    override fun seekTo(positionMs: Long) {}
+    override fun seekTo(positionMs: Long) {
+        extractor?.seekTo(positionMs * 1000, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+    }
 
     override fun release() {
         running = false
+        decodeThread?.join(200)
+        decodeThread = null
+
         codec?.stop()
         codec?.release()
         extractor?.release()
+
         codec = null
         extractor = null
     }
