@@ -9,7 +9,6 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 
-// REQUIRED extension binding
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
     name = "mx_storage"
 )
