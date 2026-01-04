@@ -1,53 +1,47 @@
 package com.mxlite.app.player
 
 import android.content.Context
-import android.net.Uri
 import android.view.Surface
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import java.io.File
 
 class ExoPlayerEngine(
-    private val context: Context
-) {
+    context: Context
+) : PlayerEngine {
 
-    private var player: ExoPlayer? = null
+    private val player = ExoPlayer.Builder(context).build()
 
-    private fun ensurePlayer() {
-        if (player != null) return
-
-        val trackSelector = DefaultTrackSelector(context)
-
-        player = ExoPlayer.Builder(context)
-            .setTrackSelector(trackSelector)
-            .build().apply {
-                playWhenReady = false
-                repeatMode = Player.REPEAT_MODE_OFF
-            }
+    override fun attachSurface(surface: Surface) {
+        player.setVideoSurface(surface)
     }
 
-    fun attachSurface(surface: Surface) {
-        ensurePlayer()
-        player?.setVideoSurface(surface)
+    override fun play(file: File) {
+        val item = MediaItem.fromUri(file.toURI().toString())
+        player.setMediaItem(item)
+        player.prepare()
+        player.playWhenReady = true
     }
 
-    fun play(file: File) {
-        ensurePlayer()
-        val item = MediaItem.fromUri(Uri.fromFile(file))
-        player?.setMediaItem(item)
-        player?.prepare()
-        player?.play()
+    override fun pause() {
+        player.pause()
     }
 
-    fun pause() {
-        player?.pause()
+    override fun seekTo(positionMs: Long) {
+        player.seekTo(positionMs)
     }
 
-    fun release() {
-        player?.clearVideoSurface()
-        player?.release()
-        player = null
+    override fun release() {
+        player.release()
     }
+
+    override val durationMs: Long
+        get() = if (player.duration >= 0) player.duration else 0L
+
+    override val currentPositionMs: Long
+        get() = player.currentPosition
+
+    override val isPlaying: Boolean
+        get() = player.isPlaying
 }
