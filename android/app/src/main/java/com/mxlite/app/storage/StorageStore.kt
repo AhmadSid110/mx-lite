@@ -2,12 +2,17 @@ package com.mxlite.app.storage
 
 import android.content.Context
 import android.net.Uri
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 
-private val Context.dataStore by preferencesDataStore("mx_storage")
+// REQUIRED extension binding
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "mx_storage"
+)
 
 class StorageStore(private val context: Context) {
 
@@ -15,18 +20,18 @@ class StorageStore(private val context: Context) {
     private val RECENT_FILES = stringSetPreferencesKey("recent_files")
 
     suspend fun addFolder(uri: Uri) {
-        context.dataStore.edit {
-            val set = it[RECENT_FOLDERS]?.toMutableSet() ?: mutableSetOf()
+        context.dataStore.edit { prefs ->
+            val set = prefs[RECENT_FOLDERS]?.toMutableSet() ?: mutableSetOf()
             set.add(uri.toString())
-            it[RECENT_FOLDERS] = set
+            prefs[RECENT_FOLDERS] = set
         }
     }
 
     suspend fun addFile(uri: Uri) {
-        context.dataStore.edit {
-            val set = it[RECENT_FILES]?.toMutableSet() ?: mutableSetOf()
+        context.dataStore.edit { prefs ->
+            val set = prefs[RECENT_FILES]?.toMutableSet() ?: mutableSetOf()
             set.add(uri.toString())
-            it[RECENT_FILES] = set
+            prefs[RECENT_FILES] = set
         }
     }
 
