@@ -7,6 +7,7 @@ import android.view.Surface
 import java.io.File
 
 class MediaCodecEngine : PlayerEngine {
+    private var durationUs: Long = 0
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
@@ -33,6 +34,7 @@ class MediaCodecEngine : PlayerEngine {
         extractor!!.selectTrack(trackIndex)
 
         val format = extractor!!.getTrackFormat(trackIndex)
+        durationUs = format.getLong(android.media.MediaFormat.KEY_DURATION)
         val mime = format.getString(MediaFormat.KEY_MIME)!!
 
         codec = MediaCodec.createDecoderByType(mime).apply {
@@ -82,6 +84,15 @@ class MediaCodecEngine : PlayerEngine {
         }
     }
 
+    override fun seekTo(positionMs: Long) {
+        extractor?.seekTo(positionMs * 1000, android.media.MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+    }
+
+    override val durationMs: Long
+        get() = durationUs / 1000
+
+    override val currentPositionMs: Long
+        get() = PlaybackClock.audioPositionMs
     override fun pause() { running = false }
 
     override fun seekTo(positionMs: Long) {
