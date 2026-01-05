@@ -3,19 +3,20 @@ package com.mxlite.app.storage
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
-import java.util.Locale
 
-fun listSafFolder(
-    context: Context,
-    treeUri: Uri
-): List<DocumentFile> {
-    val root = DocumentFile.fromTreeUri(context, treeUri)
-        ?: return emptyList()
+class SafBrowser(
+    private val context: Context
+) {
+    fun listFolder(treeUri: Uri): List<DocumentFile> {
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
+        return listChildren(root)
+    }
 
-    return root.listFiles().sortedWith(
-        compareBy<DocumentFile>(
-            { !it.isDirectory },                       // folders first
-            { it.name?.lowercase(Locale.ROOT) ?: "" }  // null-safe, stable
-        )
-    )
+    fun listChildren(dir: DocumentFile): List<DocumentFile> {
+        return dir.listFiles()
+            .sortedWith(
+                compareBy<DocumentFile> { !it.isDirectory }
+                    .thenBy { it.name?.lowercase() }
+            )
+    }
 }
