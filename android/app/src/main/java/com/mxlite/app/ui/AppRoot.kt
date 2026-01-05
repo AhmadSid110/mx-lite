@@ -22,11 +22,14 @@ fun AppRoot() {
 
     if (playingFile != null) {
         PlayerScreen(
-            file = playingFile!!,
-            engine = engine,
-            onBack = { playingFile = null }
-        )
-    } else {
+    file = playingFile,
+    safUri = playingSafUri,
+    engine = engine,
+    onBack = {
+        playingFile = null
+        playingSafUri = null
+    }
+) else {
         FileBrowserScreen(
             onFileSelected = { file ->
                 playingFile = file
