@@ -11,7 +11,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.mxlite.app.persistTreePermission
+import androidx.documentfile.provider.DocumentFile
+import com.mxlite.app.storage.SafBrowser
 import com.mxlite.app.storage.StorageStore
 import kotlinx.coroutines.launch
 import java.io.File
@@ -24,38 +25,52 @@ fun FileBrowserScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
+    val safBrowser = remember { SafBrowser(context) }
 
+    // ───────── NORMAL FS STATE ─────────
     var currentDir by remember { mutableStateOf(File("/storage/emulated/0")) }
-    var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
 
-    // Load persisted SAF folders once
+    // ───────── SAF STATE ─────────
+    var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var safRoot by remember { mutableStateOf<Uri?>(null) }
+    var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
+
     LaunchedEffect(Unit) {
         safFolders = store.getFolders()
     }
 
-    val files = remember(currentDir) {
-        currentDir.listFiles()?.sortedBy { !it.isDirectory } ?: emptyList()
-    }
-
-    // 🔐 SAF folder picker
     val folderPicker =
         rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocumentTree()
         ) { uri ->
             if (uri != null) {
                 persistTreePermission(context, uri)
-
                 scope.launch {
                     store.addFolder(uri)
-                    safFolders = store.getFolders() // refresh
+                    safFolders = store.getFolders()
                 }
             }
         }
 
     Column {
-        // 🔝 Top bar with SAF button
+
         TopAppBar(
-            title = { Text("File Browser") },
+            title = {
+                Text(
+                    if (currentSafDir != null) "SAF Browser"
+                    else "File Browser"
+                )
+            },
+            navigationIcon = if (currentSafDir != null) {
+                {
+                    IconButton(onClick = {
+                        currentSafDir = null
+                        safRoot = null
+                    }) {
+                        Text("←")
+                    }
+                }
+            } else null,
             actions = {
                 TextButton(onClick = { folderPicker.launch(null) }) {
                     Text("Pick Folder")
@@ -63,10 +78,10 @@ fun FileBrowserScreen(
             }
         )
 
-        // 🔐 SAF folders section
-        if (safFolders.isNotEmpty()) {
+        // ───────── SAF ROOT LIST ─────────
+        if (currentSafDir == null && safFolders.isNotEmpty()) {
             Text(
-                text = "Pinned folders",
+                "Pinned folders",
                 modifier = Modifier.padding(12.dp),
                 style = MaterialTheme.typography.labelLarge
             )
@@ -78,7 +93,9 @@ fun FileBrowserScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                // SAF browsing comes in SAF-3
+                                safRoot = uri
+                                currentSafDir =
+                                    DocumentFile.fromTreeUri(context, uri)
                             }
                             .padding(12.dp)
                     )
@@ -88,7 +105,38 @@ fun FileBrowserScreen(
             Divider()
         }
 
-        // 📂 Normal filesystem browser
+        // ───────── SAF DIRECTORY VIEW ─────────
+        if (currentSafDir != null) {
+            val children = remember(currentSafDir) {
+                safBrowser.listChildren(currentSafDir!!)
+            }
+
+            LazyColumn {
+                items(children) { doc ->
+                    Text(
+                        text = if (doc.isDirectory) "📁 ${doc.name}" else doc.name ?: "",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (doc.isDirectory) {
+                                    currentSafDir = doc
+                                } else {
+                                    // SAF file playback comes in SAF-4
+                                }
+                            }
+                            .padding(12.dp)
+                    )
+                }
+            }
+
+            return@Column
+        }
+
+        // ───────── NORMAL FILESYSTEM VIEW ─────────
+        val files = remember(currentDir) {
+            currentDir.listFiles()?.sortedBy { !it.isDirectory } ?: emptyList()
+        }
+
         Text(
             text = currentDir.absolutePath,
             modifier = Modifier.padding(8.dp),
