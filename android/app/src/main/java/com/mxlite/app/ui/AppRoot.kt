@@ -1,39 +1,42 @@
 package com.mxlite.app.ui
 
+import android.net.Uri
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import androidx.compose.material3.*
 import androidx.compose.ui.platform.LocalContext
+import com.mxlite.app.player.PlayerController
 import com.mxlite.app.player.PlayerEngine
-import com.mxlite.app.player.ExoPlayerEngine
 import com.mxlite.app.ui.player.PlayerScreen
-import com.mxlite.app.ui.browser.FileBrowserScreen
 import java.io.File
 
 @Composable
 fun AppRoot() {
     val context = LocalContext.current
 
-    // 🔒 UI depends ONLY on PlayerEngine
+    // 🔒 Engine is abstracted
     val engine: PlayerEngine = remember {
-        ExoPlayerEngine(context)
+        PlayerController()
     }
 
+    // ───────── Playback state ─────────
     var playingFile by remember { mutableStateOf<File?>(null) }
+    var playingSafUri by remember { mutableStateOf<Uri?>(null) }
 
-    if (playingFile != null) {
-        PlayerScreen(
-    file = playingFile,
-    safUri = playingSafUri,
-    engine = engine,
-    onBack = {
-        playingFile = null
-        playingSafUri = null
-    }
-) else {
-        FileBrowserScreen(
-            onFileSelected = { file ->
-                playingFile = file
-            }
-        )
+    when {
+        playingFile != null || playingSafUri != null -> {
+            PlayerScreen(
+                file = playingFile,
+                safUri = playingSafUri,
+                engine = engine,
+                onBack = {
+                    playingFile = null
+                    playingSafUri = null
+                }
+            )
+        }
+
+        else -> {
+            Text("Home (wire browser → player here)")
+        }
     }
 }
