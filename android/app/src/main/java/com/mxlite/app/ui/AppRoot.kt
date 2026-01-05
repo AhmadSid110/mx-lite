@@ -6,16 +6,16 @@ import androidx.compose.ui.platform.LocalContext
 import com.mxlite.app.player.PlayerEngine
 import com.mxlite.app.player.ExoPlayerEngine
 import com.mxlite.app.ui.player.PlayerScreen
+import com.mxlite.app.ui.browser.FileBrowserScreen
 import java.io.File
 
 @Composable
 fun AppRoot() {
     val context = LocalContext.current
 
-    // 🔒 Step 4: UI depends ONLY on PlayerEngine
+    // 🔒 UI depends ONLY on PlayerEngine
     val engine: PlayerEngine = remember {
         ExoPlayerEngine(context)
-        // later you can swap to MediaCodecEngine(context)
     }
 
     var playingFile by remember { mutableStateOf<File?>(null) }
@@ -27,6 +27,10 @@ fun AppRoot() {
             onBack = { playingFile = null }
         )
     } else {
-        Text("Home (wire browser → player here)")
+        FileBrowserScreen(
+            onFileSelected = { file ->
+                playingFile = file
+            }
+        )
     }
 }
