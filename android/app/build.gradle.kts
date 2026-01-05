@@ -43,6 +43,7 @@ dependencies {
 
     // ✅ DataStore (THIS WILL NOW RESOLVE)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // Media
     implementation("androidx.media3:media3-exoplayer:1.2.1")
