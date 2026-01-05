@@ -1,6 +1,5 @@
 package com.mxlite.app.ui.browser
 
-import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,7 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.mxlite.app.MainActivity
+import com.mxlite.app.persistTreePermission
 import com.mxlite.app.storage.StorageStore
 import kotlinx.coroutines.launch
 import java.io.File
@@ -24,8 +23,16 @@ fun FileBrowserScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    
+    val store = remember { StorageStore(context) }
+
     var currentDir by remember { mutableStateOf(File("/storage/emulated/0")) }
+    var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
+    // Load persisted SAF folders once
+    LaunchedEffect(Unit) {
+        safFolders = store.getFolders()
+    }
+
     val files = remember(currentDir) {
         currentDir.listFiles()?.sortedBy { !it.isDirectory } ?: emptyList()
     }
@@ -36,12 +43,11 @@ fun FileBrowserScreen(
             contract = ActivityResultContracts.OpenDocumentTree()
         ) { uri ->
             if (uri != null) {
-                // Persist permission
-                (context as? MainActivity)?.persistTreePermission(uri)
+                persistTreePermission(context, uri)
 
-                // Save to DataStore
                 scope.launch {
-                    StorageStore(context).addFolder(uri)
+                    store.addFolder(uri)
+                    safFolders = store.getFolders() // refresh
                 }
             }
         }
@@ -57,6 +63,32 @@ fun FileBrowserScreen(
             }
         )
 
+        // 🔐 SAF folders section
+        if (safFolders.isNotEmpty()) {
+            Text(
+                text = "Pinned folders",
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.labelLarge
+            )
+
+            LazyColumn {
+                items(safFolders) { uri ->
+                    Text(
+                        text = "📁 ${uri.lastPathSegment ?: uri}",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                // SAF browsing comes in SAF-3
+                            }
+                            .padding(12.dp)
+                    )
+                }
+            }
+
+            Divider()
+        }
+
+        // 📂 Normal filesystem browser
         Text(
             text = currentDir.absolutePath,
             modifier = Modifier.padding(8.dp),
