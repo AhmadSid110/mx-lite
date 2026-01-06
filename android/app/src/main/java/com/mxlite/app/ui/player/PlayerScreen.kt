@@ -8,7 +8,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mxlite.app.player.PlayerEngine
@@ -23,7 +22,9 @@ fun PlayerScreen(
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    val context = LocalContext.current
+    require(file != null || safUri != null) {
+        "Either file or safUri must be non-null"
+    }
 
     // ───────── Playback State ─────────
     var positionMs by remember { mutableStateOf(0L) }
@@ -93,16 +94,18 @@ fun PlayerScreen(
                         }
                     )
                 },
-            factory = {
-                SurfaceView(it).apply {
+            factory = { ctx ->
+                SurfaceView(ctx).apply {
                     holder.addCallback(
                         object : android.view.SurfaceHolder.Callback {
 
                             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                                 engine.attachSurface(holder.surface)
 
-                                // 🔹 Filesystem playback (SAF playback comes in SAF-5)
-                                file?.let { engine.play(it) }
+                                when {
+                                    file != null -> engine.play(file)
+                                    safUri != null -> engine.play(safUri)
+                                }
                             }
 
                             override fun surfaceChanged(
