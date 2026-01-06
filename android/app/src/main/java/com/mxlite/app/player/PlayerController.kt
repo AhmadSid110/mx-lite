@@ -24,11 +24,12 @@ class PlayerController : PlayerEngine {
 
     override fun play(file: File) {
         audio.reset()
-        audio.play()
+        audio.play(file)      // ✅ FIX: pass file
         video.play(file)
     }
 
     override fun play(uri: Uri) {
+        // SAF-5 (next step)
         throw IllegalStateException("SAF playback not implemented yet")
     }
 
@@ -37,10 +38,12 @@ class PlayerController : PlayerEngine {
         video.pause()
     }
 
-    override fun seekTo(positionMs: Long) {}
+    override fun seekTo(positionMs: Long) {
+        // D2-D++ (audio-accurate seek)
+    }
 
     override fun release() {
-        audio.pause()
+        audio.release()
         video.release()
     }
 }
