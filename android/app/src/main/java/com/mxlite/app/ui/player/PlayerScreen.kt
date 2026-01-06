@@ -16,16 +16,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.player.PlayerEngine
 import com.mxlite.app.subtitle.SubtitleController
 import com.mxlite.app.subtitle.SubtitleCue
-import com.mxlite.app.subtitle.SubtitleParser
+import com.mxlite.app.subtitle.SubtitlePrefsStore
+import com.mxlite.app.subtitle.SubtitleTrack
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -35,6 +39,9 @@ private const val MinSubtitleFontSize = 12f
 private const val MaxSubtitleFontSize = 28f
 private const val MinSubtitleOpacity = 0f
 private const val MaxSubtitleOpacity = 1f
+private const val MinBottomMargin = 16f
+private const val MaxBottomMargin = 120f
+private const val MaxSubtitleLines = 3
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +52,9 @@ fun PlayerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    
+    val prefsStore = remember { SubtitlePrefsStore(context) }
+    val videoId = remember(file) { SubtitlePrefsStore.videoIdFromFile(file) }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -60,7 +70,10 @@ fun PlayerScreen(
     var subtitleFontSizeSp by remember { mutableStateOf(18f) }
     var subtitleBgOpacity by remember { mutableStateOf(0.6f) }
     var subtitleColor by remember { mutableStateOf(Color.White) }
+    var subtitleBottomMargin by remember { mutableStateOf(48f) }
     var subtitleError by remember { mutableStateOf<String?>(null) }
+    var selectedTrackId by remember { mutableStateOf<String?>(null) }
+    var showTrackSelector by remember { mutableStateOf(false) }
 
     val subtitlePicker =
         rememberLauncherForActivityResult(
@@ -68,26 +81,97 @@ fun PlayerScreen(
         ) { uri: Uri? ->
             if (uri != null) {
                 scope.launch {
-                    val cues = SubtitleParser.parseUri(context, uri)
-                    subtitleController = cues.takeIf { it.isNotEmpty() }?.let { SubtitleController(it) }
+                    val docFile = DocumentFile.fromSingleUri(context, uri)
+                    val track = SubtitleTrack.SafTrack(
+                        uri = uri,
+                        name = docFile?.name ?: "Subtitle"
+                    )
+                    subtitleController?.addTrack(track)
+                    subtitleController?.selectTrack(track.id)
+                    selectedTrackId = track.id
                     subtitleLine = null
-                    subtitleError = if (cues.isNotEmpty()) null else "Failed to load subtitles"
+                    subtitleError = null
+                    
+                    // Save selected track
+                    prefsStore.save(
+                        videoId,
+                        SubtitlePrefsStore.SubtitlePrefs(
+                            enabled = subtitlesEnabled,
+                            offsetMs = subtitleOffsetMs,
+                            fontSizeSp = subtitleFontSizeSp,
+                            textColor = subtitleColor,
+                            bgOpacity = subtitleBgOpacity,
+                            selectedTrackId = track.id,
+                            bottomMarginDp = subtitleBottomMargin
+                        )
+                    )
                 }
             }
         }
 
+    // Load preferences and initialize subtitle controller
     LaunchedEffect(file) {
-        subtitleController = null
+        // Load saved preferences
+        val savedPrefs = prefsStore.load(videoId)
+        subtitlesEnabled = savedPrefs.enabled
+        subtitleOffsetMs = savedPrefs.offsetMs
+        subtitleFontSizeSp = savedPrefs.fontSizeSp
+        subtitleColor = savedPrefs.textColor
+        subtitleBgOpacity = savedPrefs.bgOpacity
+        subtitleBottomMargin = savedPrefs.bottomMarginDp
+        selectedTrackId = savedPrefs.selectedTrackId
+        
+        // Initialize subtitle controller
+        subtitleController = SubtitleController(context, null)
         subtitleLine = null
+        
+        // Auto-load subtitle from same folder
         val parent = file.parentFile
         if (parent != null) {
             val srt = File(parent, file.nameWithoutExtension + ".srt")
-            val cues = SubtitleParser.parseFile(srt)
-            subtitleController = cues.takeIf { it.isNotEmpty() }?.let { SubtitleController(it) }
-            subtitleError = if (srt.exists() && cues.isEmpty()) "Failed to load ${srt.name}" else null
-        } else {
-            subtitleError = null
+            if (srt.exists()) {
+                val track = SubtitleTrack.FileTrack(srt)
+                subtitleController?.addTrack(track)
+                
+                // Restore saved track or use default
+                if (savedPrefs.selectedTrackId == track.id) {
+                    subtitleController?.selectTrack(track.id)
+                    selectedTrackId = track.id
+                } else if (savedPrefs.selectedTrackId == null) {
+                    // No saved preference, use default track
+                    subtitleController?.selectTrack(track.id)
+                    selectedTrackId = track.id
+                }
+            }
         }
+        
+        subtitleError = null
+    }
+
+    // Save preferences when they change
+    LaunchedEffect(
+        subtitlesEnabled,
+        subtitleOffsetMs,
+        subtitleFontSizeSp,
+        subtitleColor,
+        subtitleBgOpacity,
+        selectedTrackId,
+        subtitleBottomMargin
+    ) {
+        // Debounce saves
+        delay(500)
+        prefsStore.save(
+            videoId,
+            SubtitlePrefsStore.SubtitlePrefs(
+                enabled = subtitlesEnabled,
+                offsetMs = subtitleOffsetMs,
+                fontSizeSp = subtitleFontSizeSp,
+                textColor = subtitleColor,
+                bgOpacity = subtitleBgOpacity,
+                selectedTrackId = selectedTrackId,
+                bottomMarginDp = subtitleBottomMargin
+            )
+        )
     }
 
     // ⏱ Poll engine clock
@@ -171,7 +255,8 @@ fun PlayerScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .align(Alignment.BottomCenter)
-                            .padding(bottom = 48.dp),
+                            .padding(bottom = subtitleBottomMargin.dp)
+                            .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.BottomCenter
                     ) {
                         Text(
@@ -179,6 +264,13 @@ fun PlayerScreen(
                             color = subtitleColor,
                             textAlign = TextAlign.Center,
                             fontSize = subtitleFontSizeSp.sp,
+                            maxLines = MaxSubtitleLines,
+                            style = TextStyle(
+                                shadow = Shadow(
+                                    color = Color.Black,
+                                    blurRadius = 8f
+                                )
+                            ),
                             modifier = Modifier
                                 .background(
                                     Color.Black.copy(alpha = subtitleBgOpacity),
@@ -254,7 +346,54 @@ fun PlayerScreen(
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     OutlinedButton(onClick = { subtitlePicker.launch(SubtitleMimeTypes) }) {
-                        Text("Load Subtitles")
+                        Text("Load")
+                    }
+                }
+
+                // Track selector
+                subtitleController?.let { controller ->
+                    if (controller.availableTracks.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Text(
+                            text = "Subtitle Track",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        selectedTrackId = null
+                                        controller.selectTrack(null)
+                                    }
+                                }
+                            ) {
+                                Text("None")
+                            }
+                            
+                            controller.availableTracks.forEach { track ->
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            selectedTrackId = track.id
+                                            controller.selectTrack(track.id)
+                                        }
+                                    }
+                                ) {
+                                    Text(
+                                        text = track.displayName.take(15),
+                                        color = if (selectedTrackId == track.id)
+                                            MaterialTheme.colorScheme.primary
+                                        else
+                                            MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -287,6 +426,16 @@ fun PlayerScreen(
                     value = subtitleBgOpacity,
                     onValueChange = { subtitleBgOpacity = it },
                     valueRange = MinSubtitleOpacity..MaxSubtitleOpacity
+                )
+
+                Text(
+                    text = "Bottom Margin: ${subtitleBottomMargin.toInt()}dp",
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Slider(
+                    value = subtitleBottomMargin,
+                    onValueChange = { subtitleBottomMargin = it },
+                    valueRange = MinBottomMargin..MaxBottomMargin
                 )
 
                 Text(
