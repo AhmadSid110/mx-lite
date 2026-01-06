@@ -1,0 +1,133 @@
+name: MX Lite Android Build
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+
+  # Auto trigger on tags and all branches
+  push:
+    tags:
+      - "v*.*.*"
+    branches:
+      - "**"
+
+permissions:
+  contents: write
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+
+    steps:
+      # ─────────────────────────────
+      # 1️⃣ Checkout
+      # ─────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ─────────────────────────────
+      # 2️⃣ Version logic
+      # ─────────────────────────────
+      - name: Extract version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION="dev-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Using version: $VERSION"
+
+      # ─────────────────────────────
+      # 3️⃣ Java 17
+      # ─────────────────────────────
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # ─────────────────────────────
+      # 4️⃣ Android SDK
+      # ─────────────────────────────
+      - name: Install Android SDK
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT"
+          cd "$ANDROID_SDK_ROOT"
+
+          curl -s https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o tools.zip
+
+          unzip -q tools.zip
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/* cmdline-tools/latest/
+
+          rm -rf tools.zip
+
+          yes | cmdline-tools/latest/bin/sdkmanager \
+            --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+      # ─────────────────────────────
+      # 5️⃣ local.properties
+      # ─────────────────────────────
+      - name: Write local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+
+      # ─────────────────────────────
+      # 6️⃣ gradle.properties (stable)
+      # ─────────────────────────────
+      - name: Write gradle.properties
+        run: |
+          cat <<EOF > android/gradle.properties
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx3g -XX:+UseParallelGC
+          org.gradle.daemon=false
+          EOF
+
+      # ─────────────────────────────
+      # 7️⃣ Build APK
+      # ─────────────────────────────
+      - name: Build Debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug \
+            -PversionName=$APP_VERSION \
+            --no-daemon
+
+      # ─────────────────────────────
+      # 8️⃣ Rename APK → mxlite.apk
+      # ─────────────────────────────
+      - name: Rename APK
+        run: |
+          mv android/app/build/outputs/apk/debug/app-debug.apk \
+             android/app/build/outputs/apk/debug/mxlite.apk
+
+      # ─────────────────────────────
+      # 9️⃣ Verify output
+      # ─────────────────────────────
+      - name: Verify APK
+        run: |
+          ls -lh android/app/build/outputs/apk/debug/
+          test -f android/app/build/outputs/apk/debug/mxlite.apk
+
+      # ─────────────────────────────
+      # 🔟 Upload to GitHub Release
+      # ─────────────────────────────
+      - name: Upload APK to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: MX Lite v${{ env.APP_VERSION }}
+          prerelease: true
+          files: android/app/build/outputs/apk/debug/mxlite.apk
