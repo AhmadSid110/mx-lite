@@ -1,17 +1,13 @@
 package com.mxlite.app.player
 
-import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.view.Surface
 import java.io.File
 import kotlin.concurrent.thread
 
 class MediaCodecEngine(
-    private val context: Context,
     private val clock: PlaybackClock
 ) : PlayerEngine {
 
@@ -20,13 +16,9 @@ class MediaCodecEngine(
     private var surface: Surface? = null
     private var running = false
 
-    private var pfd: ParcelFileDescriptor? = null
-
     override val durationMs: Long = 0
-
     override val currentPositionMs: Long
         get() = clock.positionMs
-
     override val isPlaying: Boolean
         get() = running
 
@@ -34,32 +26,13 @@ class MediaCodecEngine(
         this.surface = surface
     }
 
-    // ───────── FILE PLAYBACK ─────────
     override fun play(file: File) {
-        startExtractor {
-            it.setDataSource(file.absolutePath)
-        }
-    }
-
-    // ───────── SAF PLAYBACK (🔥 F-6) ─────────
-    override fun play(uri: Uri) {
-        startExtractor {
-            pfd = context.contentResolver
-                .openFileDescriptor(uri, "r")
-
-            it.setDataSource(
-                pfd!!.fileDescriptor,
-                0,
-                pfd!!.statSize
-            )
-        }
-    }
-
-    private fun startExtractor(configure: (MediaExtractor) -> Unit) {
         release()
         running = true
 
-        extractor = MediaExtractor().also(configure)
+        extractor = MediaExtractor().apply {
+            setDataSource(file.absolutePath)
+        }
 
         val trackIndex = selectVideoTrack(extractor!!)
         extractor!!.selectTrack(trackIndex)
@@ -77,9 +50,13 @@ class MediaCodecEngine(
         }
     }
 
+    override fun play(uri: android.net.Uri) {
+        throw IllegalStateException("SAF playback not implemented yet")
+    }
+
     private fun decodeLoop() {
-        val extractor = extractor ?: return
         val codec = codec ?: return
+        val extractor = extractor ?: return
         val info = MediaCodec.BufferInfo()
 
         while (running) {
@@ -95,11 +72,8 @@ class MediaCodecEngine(
                     )
                 } else {
                     codec.queueInputBuffer(
-                        inIndex,
-                        0,
-                        size,
-                        extractor.sampleTime,
-                        0
+                        inIndex, 0, size,
+                        extractor.sampleTime, 0
                     )
                     extractor.advance()
                 }
@@ -107,19 +81,13 @@ class MediaCodecEngine(
 
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
             if (outIndex >= 0) {
-                val videoMs = info.presentationTimeUs / 1000
+                val videoPtsMs = info.presentationTimeUs / 1000
                 val audioMs = clock.positionMs
-                val delta = videoMs - audioMs
+                val delta = videoPtsMs - audioMs
 
-                when {
-                    delta > 30 -> Thread.sleep(delta)
-                    delta < -50 -> {
-                        codec.releaseOutputBuffer(outIndex, false)
-                        continue
-                    }
-                }
-
-                codec.releaseOutputBuffer(outIndex, true)
+                if (delta > 30) Thread.sleep(delta)
+                if (delta >= -50) codec.releaseOutputBuffer(outIndex, true)
+                else codec.releaseOutputBuffer(outIndex, false)
             }
 
             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
@@ -140,10 +108,7 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
-        extractor?.seekTo(
-            positionMs * 1000,
-            MediaExtractor.SEEK_TO_CLOSEST_SYNC
-        )
+        // D2-D+
     }
 
     override fun release() {
@@ -151,10 +116,7 @@ class MediaCodecEngine(
         codec?.stop()
         codec?.release()
         extractor?.release()
-        pfd?.close()
-
         codec = null
         extractor = null
-        pfd = null
     }
 }
