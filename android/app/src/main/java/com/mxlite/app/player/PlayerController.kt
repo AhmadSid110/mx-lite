@@ -1,6 +1,5 @@
 package com.mxlite.app.player
 
-import android.net.Uri
 import android.view.Surface
 import java.io.File
 
@@ -24,13 +23,8 @@ class PlayerController : PlayerEngine {
 
     override fun play(file: File) {
         audio.reset()
-        audio.play(file)      // ✅ FIX: pass file
+        audio.play(file)
         video.play(file)
-    }
-
-    override fun play(uri: Uri) {
-        // SAF-5 (next step)
-        throw IllegalStateException("SAF playback not implemented yet")
     }
 
     override fun pause() {
@@ -39,7 +33,7 @@ class PlayerController : PlayerEngine {
     }
 
     override fun seekTo(positionMs: Long) {
-        // D2-D++ (audio-accurate seek)
+        // D2-D+ (future)
     }
 
     override fun release() {
