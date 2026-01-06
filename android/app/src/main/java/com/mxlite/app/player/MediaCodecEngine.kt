@@ -5,19 +5,22 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.view.Surface
 import java.io.File
 import kotlin.concurrent.thread
 
 class MediaCodecEngine(
-    private val clock: PlaybackClock,
-    private val context: Context
+    private val context: Context,
+    private val clock: PlaybackClock
 ) : PlayerEngine {
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
     private var running = false
+
+    private var pfd: ParcelFileDescriptor? = null
 
     override val durationMs: Long = 0
 
@@ -33,39 +36,35 @@ class MediaCodecEngine(
 
     // ───────── FILE PLAYBACK ─────────
     override fun play(file: File) {
-        release()
-        running = true
-
-        extractor = MediaExtractor().apply {
-            setDataSource(file.absolutePath)
+        startExtractor {
+            it.setDataSource(file.absolutePath)
         }
-
-        startDecode()
     }
 
-    // ───────── SAF PLAYBACK ─────────
+    // ───────── SAF PLAYBACK (🔥 F-6) ─────────
     override fun play(uri: Uri) {
+        startExtractor {
+            pfd = context.contentResolver
+                .openFileDescriptor(uri, "r")
+
+            it.setDataSource(
+                pfd!!.fileDescriptor,
+                0,
+                pfd!!.statSize
+            )
+        }
+    }
+
+    private fun startExtractor(configure: (MediaExtractor) -> Unit) {
         release()
         running = true
 
-        val pfd =
-            context.contentResolver.openFileDescriptor(uri, "r")
-                ?: error("Cannot open SAF uri")
+        extractor = MediaExtractor().also(configure)
 
-        extractor = MediaExtractor().apply {
-            setDataSource(pfd.fileDescriptor)
-        }
+        val trackIndex = selectVideoTrack(extractor!!)
+        extractor!!.selectTrack(trackIndex)
 
-        startDecode()
-    }
-
-    private fun startDecode() {
-        val extractor = extractor ?: return
-
-        val trackIndex = selectVideoTrack(extractor)
-        extractor.selectTrack(trackIndex)
-
-        val format = extractor.getTrackFormat(trackIndex)
+        val format = extractor!!.getTrackFormat(trackIndex)
         val mime = format.getString(MediaFormat.KEY_MIME)!!
 
         codec = MediaCodec.createDecoderByType(mime).apply {
@@ -79,8 +78,8 @@ class MediaCodecEngine(
     }
 
     private fun decodeLoop() {
-        val codec = codec ?: return
         val extractor = extractor ?: return
+        val codec = codec ?: return
         val info = MediaCodec.BufferInfo()
 
         while (running) {
@@ -108,9 +107,9 @@ class MediaCodecEngine(
 
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
             if (outIndex >= 0) {
-                val videoPtsMs = info.presentationTimeUs / 1000
+                val videoMs = info.presentationTimeUs / 1000
                 val audioMs = clock.positionMs
-                val delta = videoPtsMs - audioMs
+                val delta = videoMs - audioMs
 
                 when {
                     delta > 30 -> Thread.sleep(delta)
@@ -141,7 +140,10 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
-        // implemented later (D2-D+ already stable)
+        extractor?.seekTo(
+            positionMs * 1000,
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
     }
 
     override fun release() {
@@ -149,7 +151,10 @@ class MediaCodecEngine(
         codec?.stop()
         codec?.release()
         extractor?.release()
+        pfd?.close()
+
         codec = null
         extractor = null
+        pfd = null
     }
 }
