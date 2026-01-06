@@ -14,22 +14,20 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.storage.SafBrowser
 import com.mxlite.app.storage.StorageStore
-import com.mxlite.app.storage.persistTreePermission
 import kotlinx.coroutines.launch
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
-    onFileSelected: (File) -> Unit,
-    onSafFileSelected: (Uri) -> Unit
+    onFileSelected: (File) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
     val safBrowser = remember { SafBrowser(context) }
 
-    // ───────── NORMAL FS ─────────
+    // ───────── NORMAL FS STATE ─────────
     var currentDir by remember { mutableStateOf(File("/storage/emulated/0")) }
 
     // ───────── SAF STATE ─────────
@@ -55,17 +53,18 @@ fun FileBrowserScreen(
 
     Column {
 
+        // ✅ FIXED TopAppBar (NO NULL LAMBDAS)
         TopAppBar(
             title = {
                 Text(if (currentSafDir != null) "SAF Browser" else "File Browser")
             },
-            navigationIcon = if (currentSafDir != null) {
-                {
+            navigationIcon = {
+                if (currentSafDir != null) {
                     IconButton(onClick = { currentSafDir = null }) {
                         Text("←")
                     }
                 }
-            } else null,
+            },
             actions = {
                 TextButton(onClick = { folderPicker.launch(null) }) {
                     Text("Pick Folder")
@@ -108,28 +107,24 @@ fun FileBrowserScreen(
             LazyColumn {
                 items(children) { doc ->
                     Text(
-                        text = if (doc.isDirectory)
-                            "📁 ${doc.name}"
-                        else
-                            doc.name ?: "",
+                        text = if (doc.isDirectory) "📁 ${doc.name}" else doc.name.orEmpty(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
                                 if (doc.isDirectory) {
                                     currentSafDir = doc
                                 } else {
-                                    onSafFileSelected(doc.uri)
+                                    // SAF file playback → SAF-5
                                 }
                             }
                             .padding(12.dp)
                     )
                 }
             }
-
             return@Column
         }
 
-        // ───────── NORMAL FILESYSTEM ─────────
+        // ───────── NORMAL FILESYSTEM VIEW ─────────
         val files = remember(currentDir) {
             currentDir.listFiles()?.sortedBy { !it.isDirectory } ?: emptyList()
         }
@@ -143,10 +138,7 @@ fun FileBrowserScreen(
         LazyColumn {
             items(files) { file ->
                 Text(
-                    text = if (file.isDirectory)
-                        "📁 ${file.name}"
-                    else
-                        file.name,
+                    text = if (file.isDirectory) "📁 ${file.name}" else file.name,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
