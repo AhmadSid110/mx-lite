@@ -7,9 +7,8 @@ import java.io.File
 interface PlayerEngine {
     fun attachSurface(surface: Surface)
 
-    // Exactly ONE of these will be called
     fun play(file: File)
-    fun play(uri: Uri)
+    fun play(uri: Uri)        // 🔥 SAF entry point
 
     fun pause()
     fun seekTo(positionMs: Long)
