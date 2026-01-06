@@ -1,15 +1,21 @@
 package com.mxlite.app.ui.player
 
 import android.view.SurfaceView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mxlite.app.player.PlayerEngine
+import com.mxlite.app.subtitle.*
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -23,9 +29,19 @@ fun PlayerScreen(
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var controlsVisible by remember { mutableStateOf(true) }
+    var subtitleLine by remember { mutableStateOf<SubtitleLine?>(null) }
 
     var userSeeking by remember { mutableStateOf(false) }
     var seekPositionMs by remember { mutableStateOf(0L) }
+
+    val subtitleController = remember(file) {
+        file.parentFile?.let { parent ->
+            val srt = File(parent, file.nameWithoutExtension + ".srt")
+            if (srt.exists())
+                SubtitleController(SrtParser.parse(srt))
+            else null
+        }
+    }
 
     // ⏱ Poll engine clock
     LaunchedEffect(Unit) {
@@ -34,6 +50,7 @@ fun PlayerScreen(
                 positionMs = engine.currentPositionMs
                 durationMs = engine.durationMs
             }
+            subtitleLine = subtitleController?.current(positionMs)
             delay(500)
         }
     }
@@ -57,44 +74,72 @@ fun PlayerScreen(
             )
         }
 
-        AndroidView(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { controlsVisible = !controlsVisible },
-                        onDoubleTap = { offset ->
-                            val half = size.width / 2
-                            val delta = if (offset.x < half) -10_000 else 10_000
-                            engine.seekTo(
-                                (engine.currentPositionMs + delta)
-                                    .coerceIn(0, engine.durationMs)
-                            )
-                        }
-                    )
-                },
-            factory = { ctx ->
-                SurfaceView(ctx).apply {
-                    holder.addCallback(
-                        object : android.view.SurfaceHolder.Callback {
-                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                                engine.attachSurface(holder.surface)
-                                engine.play(file)
+        ) {
+            AndroidView(
+                modifier = Modifier
+                    .matchParentSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onTap = { controlsVisible = !controlsVisible },
+                            onDoubleTap = { offset ->
+                                val half = size.width / 2
+                                val delta = if (offset.x < half) -10_000 else 10_000
+                                engine.seekTo(
+                                    (engine.currentPositionMs + delta)
+                                        .coerceIn(0, engine.durationMs)
+                                )
                             }
-                            override fun surfaceChanged(
-                                holder: android.view.SurfaceHolder,
-                                format: Int,
-                                width: Int,
-                                height: Int
-                            ) = Unit
+                        )
+                    },
+                factory = { ctx ->
+                    SurfaceView(ctx).apply {
+                        holder.addCallback(
+                            object : android.view.SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: android.view.SurfaceHolder) {
+                                    engine.attachSurface(holder.surface)
+                                    engine.play(file)
+                                }
+                                override fun surfaceChanged(
+                                    holder: android.view.SurfaceHolder,
+                                    format: Int,
+                                    width: Int,
+                                    height: Int
+                                ) = Unit
 
-                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) = Unit
-                        }
+                                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) = Unit
+                            }
+                        )
+                    }
+                }
+            )
+
+            subtitleLine?.let { line ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 48.dp),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Text(
+                        text = line.text,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .background(
+                                Color.Black.copy(alpha = 0.6f),
+                                RoundedCornerShape(6.dp)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     )
                 }
             }
-        )
+        }
 
         if (controlsVisible) {
             Column(
