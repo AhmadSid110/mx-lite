@@ -20,6 +20,7 @@ android {
     }
 
     composeOptions {
+        // ✅ Correct for Kotlin 1.9.x + Compose 1.6.x
         kotlinCompilerExtensionVersion = "1.5.8"
     }
 
@@ -35,22 +36,48 @@ android {
 
 dependencies {
 
-    // Compose
+    // ─────────────────────────────────────────────
+    // 🔒 CRITICAL: pin coroutines explicitly
+    // (prevents GitHub Actions / Maven 403 failures)
+    // ─────────────────────────────────────────────
+    val coroutinesVersion = "1.7.3"
+
+    // ─────────────────────────────────────────────
+    // Compose (BOM controlled)
+    // ─────────────────────────────────────────────
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
     implementation("androidx.activity:activity-compose")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-tooling-preview")
 
-    // ✅ DataStore (THIS WILL NOW RESOLVE)
+    // ─────────────────────────────────────────────
+    // AndroidX Core
+    // ─────────────────────────────────────────────
+    implementation("androidx.core:core-ktx:1.12.0")
+
+    // ─────────────────────────────────────────────
+    // Lifecycle
+    // ─────────────────────────────────────────────
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
+
+    // ─────────────────────────────────────────────
+    // Storage / SAF
+    // ─────────────────────────────────────────────
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
-    // Media
+    // ─────────────────────────────────────────────
+    // Media3 (ONLY if you still use ExoPlayer)
+    // Remove these if MediaCodec-only
+    // ─────────────────────────────────────────────
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
+
     // ─────────────────────────────────────────────
-    // ✅ REQUIRED EXPLICIT DEPENDENCIES (DO NOT REMOVE)
-    // Fixes GitHub Actions Maven 403 failures
+    // REQUIRED EXPLICIT DEPENDENCIES
+    // DO NOT REMOVE
     // ─────────────────────────────────────────────
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutinesVersion")
