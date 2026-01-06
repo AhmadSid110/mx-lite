@@ -1,6 +1,5 @@
 package com.mxlite.app.ui.player
 
-import android.net.Uri
 import android.view.SurfaceView
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -17,16 +16,10 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
-    file: File?,
-    safUri: Uri?,
+    file: File,
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    require(file != null || safUri != null) {
-        "Either file or safUri must be non-null"
-    }
-
-    // ───────── Playback State ─────────
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var controlsVisible by remember { mutableStateOf(true) }
@@ -34,7 +27,7 @@ fun PlayerScreen(
     var userSeeking by remember { mutableStateOf(false) }
     var seekPositionMs by remember { mutableStateOf(0L) }
 
-    // ⏱ Poll engine clock (audio-mastered)
+    // ⏱ Poll engine clock
     LaunchedEffect(Unit) {
         while (true) {
             if (!userSeeking) {
@@ -45,7 +38,6 @@ fun PlayerScreen(
         }
     }
 
-    // 🔒 Lifecycle safety
     DisposableEffect(Unit) {
         onDispose {
             engine.release()
@@ -54,16 +46,9 @@ fun PlayerScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // ───────── Top Bar ─────────
         if (controlsVisible) {
             TopAppBar(
-                title = {
-                    Text(
-                        file?.name
-                            ?: safUri?.lastPathSegment
-                            ?: "Player"
-                    )
-                },
+                title = { Text(file.name) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Text("←")
@@ -72,21 +57,16 @@ fun PlayerScreen(
             )
         }
 
-        // ───────── Video Surface + Gestures ─────────
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .pointerInput(Unit) {
                     detectTapGestures(
-                        onTap = {
-                            controlsVisible = !controlsVisible
-                        },
+                        onTap = { controlsVisible = !controlsVisible },
                         onDoubleTap = { offset ->
                             val half = size.width / 2
-                            val delta =
-                                if (offset.x < half) -10_000 else 10_000
-
+                            val delta = if (offset.x < half) -10_000 else 10_000
                             engine.seekTo(
                                 (engine.currentPositionMs + delta)
                                     .coerceIn(0, engine.durationMs)
@@ -98,16 +78,10 @@ fun PlayerScreen(
                 SurfaceView(ctx).apply {
                     holder.addCallback(
                         object : android.view.SurfaceHolder.Callback {
-
                             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                                 engine.attachSurface(holder.surface)
-
-                                when {
-                                    file != null -> engine.play(file)
-                                    safUri != null -> engine.play(safUri)
-                                }
+                                engine.play(file)
                             }
-
                             override fun surfaceChanged(
                                 holder: android.view.SurfaceHolder,
                                 format: Int,
@@ -122,7 +96,6 @@ fun PlayerScreen(
             }
         )
 
-        // ───────── Controls ─────────
         if (controlsVisible) {
             Column(
                 modifier = Modifier
