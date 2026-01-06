@@ -1,12 +1,15 @@
 package com.mxlite.app.player
 
+import android.net.Uri
 import android.view.Surface
 import java.io.File
 
-class PlayerController : PlayerEngine {
+class PlayerController(
+    private val context: android.content.Context
+) : PlayerEngine {
 
     private val audio = AudioCodecEngine()
-    private val video = MediaCodecEngine(clock = audio)
+    private val video = MediaCodecEngine(clock = audio, context = context)
 
     override val durationMs: Long
         get() = video.durationMs
@@ -27,15 +30,18 @@ class PlayerController : PlayerEngine {
         video.play(file)
     }
 
+    override fun play(uri: Uri) {
+        audio.reset()
+        audio.play()
+        video.play(uri)
+    }
+
     override fun pause() {
         audio.pause()
         video.pause()
     }
 
-    override fun seekTo(positionMs: Long) {
-        audio.seekTo(positionMs)
-        video.seekTo(positionMs)
-    }
+    override fun seekTo(positionMs: Long) {}
 
     override fun release() {
         audio.pause()
