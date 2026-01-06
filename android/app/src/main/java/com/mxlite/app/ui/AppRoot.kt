@@ -20,23 +20,21 @@ fun AppRoot() {
 
     // ───────── Playback state ─────────
     var playingFile by remember { mutableStateOf<File?>(null) }
-    var playingSafUri by remember { mutableStateOf<Uri?>(null) }
+var playingSafUri by remember { mutableStateOf<Uri?>(null) }
 
-    when {
-        playingFile != null || playingSafUri != null -> {
-            PlayerScreen(
-                file = playingFile,
-                safUri = playingSafUri,
-                engine = engine,
-                onBack = {
-                    playingFile = null
-                    playingSafUri = null
-                }
-            )
+if (playingFile != null || playingSafUri != null) {
+    PlayerScreen(
+        file = playingFile,
+        safUri = playingSafUri,
+        engine = engine,
+        onBack = {
+            playingFile = null
+            playingSafUri = null
         }
-
-        else -> {
-            Text("Home (wire browser → player here)")
-        }
-    }
+    )
+} else {
+    FileBrowserScreen(
+        onFileSelected = { playingFile = it },
+        onSafFileSelected = { playingSafUri = it }
+    )
 }
