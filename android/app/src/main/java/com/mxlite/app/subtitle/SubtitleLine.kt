@@ -1,3 +1,7 @@
 package com.mxlite.app.subtitle
 
-typealias SubtitleLine = SubtitleCue
+data class SubtitleLine(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)

@@ -13,18 +13,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorSaver
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.platform.LocalContext
 import com.mxlite.app.player.PlayerEngine
-import com.mxlite.app.subtitle.*
+import com.mxlite.app.subtitle.SubtitleController
+import com.mxlite.app.subtitle.SubtitleCue
+import com.mxlite.app.subtitle.SubtitleParser
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -54,12 +55,12 @@ fun PlayerScreen(
     var seekPositionMs by remember { mutableStateOf(0L) }
 
     var subtitleController by remember { mutableStateOf<SubtitleController?>(null) }
-    var subtitleOffsetMs by rememberSaveable { mutableStateOf(0L) }
-    var subtitlesEnabled by rememberSaveable { mutableStateOf(true) }
-    var subtitleFontSize by rememberSaveable { mutableStateOf(18f) }
-    var subtitleBgOpacity by rememberSaveable { mutableStateOf(0.6f) }
-    var subtitleColor by rememberSaveable(stateSaver = ColorSaver) { mutableStateOf(Color.White) }
-    var subtitleError by rememberSaveable { mutableStateOf<String?>(null) }
+    var subtitleOffsetMs by remember { mutableStateOf(0L) }
+    var subtitlesEnabled by remember { mutableStateOf(true) }
+    var subtitleFontSizeSp by remember { mutableStateOf(18f) }
+    var subtitleBgOpacity by remember { mutableStateOf(0.6f) }
+    var subtitleColor by remember { mutableStateOf(Color.White) }
+    var subtitleError by remember { mutableStateOf<String?>(null) }
 
     val subtitlePicker =
         rememberLauncherForActivityResult(
@@ -67,7 +68,7 @@ fun PlayerScreen(
         ) { uri: Uri? ->
             if (uri != null) {
                 scope.launch {
-                    val cues = SubtitleLoader.loadFromUri(context, uri)
+                    val cues = SubtitleParser.parseUri(context, uri)
                     subtitleController = cues.takeIf { it.isNotEmpty() }?.let { SubtitleController(it) }
                     subtitleLine = null
                     subtitleError = if (cues.isNotEmpty()) null else "Failed to load subtitles"
@@ -81,7 +82,7 @@ fun PlayerScreen(
         val parent = file.parentFile
         if (parent != null) {
             val srt = File(parent, file.nameWithoutExtension + ".srt")
-            val cues = SubtitleLoader.loadFromFile(srt)
+            val cues = SubtitleParser.parseFile(srt)
             subtitleController = cues.takeIf { it.isNotEmpty() }?.let { SubtitleController(it) }
             subtitleError = if (srt.exists() && cues.isEmpty()) "Failed to load ${srt.name}" else null
         } else {
@@ -177,7 +178,7 @@ fun PlayerScreen(
                             text = line.text,
                             color = subtitleColor,
                             textAlign = TextAlign.Center,
-                            fontSize = subtitleFontSize.sp,
+                            fontSize = subtitleFontSizeSp.sp,
                             modifier = Modifier
                                 .background(
                                     Color.Black.copy(alpha = subtitleBgOpacity),
@@ -269,12 +270,12 @@ fun PlayerScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Font Size: ${subtitleFontSize.toInt()}sp",
+                    text = "Font Size: ${subtitleFontSizeSp.toInt()}sp",
                     style = MaterialTheme.typography.labelMedium
                 )
                 Slider(
-                    value = subtitleFontSize,
-                    onValueChange = { subtitleFontSize = it },
+                    value = subtitleFontSizeSp,
+                    onValueChange = { subtitleFontSizeSp = it },
                     valueRange = MinSubtitleFontSize..MaxSubtitleFontSize
                 )
 
