@@ -1,7 +1,6 @@
 package com.mxlite.app.ui.player
 
 import android.net.Uri
-import android.app.Activity
 import android.view.SurfaceView
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -13,8 +12,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mxlite.app.player.PlayerEngine
-import java.io.File
 import kotlinx.coroutines.delay
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -24,8 +23,9 @@ fun PlayerScreen(
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    val activity = LocalContext.current as Activity
+    val context = LocalContext.current
 
+    // ───────── Playback State ─────────
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var controlsVisible by remember { mutableStateOf(true) }
@@ -33,19 +33,7 @@ fun PlayerScreen(
     var userSeeking by remember { mutableStateOf(false) }
     var seekPositionMs by remember { mutableStateOf(0L) }
 
-    // 🔒 Enter immersive + lock orientation
-    DisposableEffect(Unit) {
-        activity.enterImmersiveMode()
-        activity.lockLandscape()
-
-        onDispose {
-            activity.exitImmersiveMode()
-            activity.unlockOrientation()
-            engine.release()
-        }
-    }
-
-    // ⏱ Poll audio clock
+    // ⏱ Poll engine clock (audio-mastered)
     LaunchedEffect(Unit) {
         while (true) {
             if (!userSeeking) {
@@ -56,11 +44,25 @@ fun PlayerScreen(
         }
     }
 
+    // 🔒 Lifecycle safety
+    DisposableEffect(Unit) {
+        onDispose {
+            engine.release()
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
 
+        // ───────── Top Bar ─────────
         if (controlsVisible) {
             TopAppBar(
-                title = { Text(file.name) },
+                title = {
+                    Text(
+                        file?.name
+                            ?: safUri?.lastPathSegment
+                            ?: "Player"
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Text("←")
@@ -69,7 +71,7 @@ fun PlayerScreen(
             )
         }
 
-        // 🎥 Video Surface + Gestures
+        // ───────── Video Surface + Gestures ─────────
         AndroidView(
             modifier = Modifier
                 .fillMaxWidth()
@@ -91,28 +93,33 @@ fun PlayerScreen(
                         }
                     )
                 },
-            factory = { ctx ->
-                SurfaceView(ctx).apply {
+            factory = {
+                SurfaceView(it).apply {
                     holder.addCallback(
                         object : android.view.SurfaceHolder.Callback {
+
                             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                                 engine.attachSurface(holder.surface)
+
+                                // 🔹 Filesystem playback (SAF playback comes in SAF-5)
                                 file?.let { engine.play(it) }
                             }
+
                             override fun surfaceChanged(
                                 holder: android.view.SurfaceHolder,
                                 format: Int,
                                 width: Int,
                                 height: Int
-                            ) {}
-                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
+                            ) = Unit
+
+                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) = Unit
                         }
                     )
                 }
             }
         )
 
-        // 🎛 Controls
+        // ───────── Controls ─────────
         if (controlsVisible) {
             Column(
                 modifier = Modifier
