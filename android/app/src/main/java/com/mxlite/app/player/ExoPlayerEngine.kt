@@ -8,7 +8,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
 
 class ExoPlayerEngine(
-    private val context: Context
+    context: Context
 ) : PlayerEngine {
 
     private val player = ExoPlayer.Builder(context).build()
@@ -17,15 +17,10 @@ class ExoPlayerEngine(
         player.setVideoSurface(surface)
     }
 
-    // ───────── FILE PLAYBACK ─────────
     override fun play(file: File) {
-        val item = MediaItem.fromUri(file.toURI().toString())
-        player.setMediaItem(item)
-        player.prepare()
-        player.playWhenReady = true
+        play(Uri.fromFile(file))
     }
 
-    // ───────── SAF PLAYBACK (REQUIRED) ─────────
     override fun play(uri: Uri) {
         val item = MediaItem.fromUri(uri)
         player.setMediaItem(item)
