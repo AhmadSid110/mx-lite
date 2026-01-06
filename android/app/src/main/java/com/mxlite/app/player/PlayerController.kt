@@ -5,14 +5,12 @@ import android.net.Uri
 import android.view.Surface
 import java.io.File
 
-class PlayerController(
-    private val context: Context
-) : PlayerEngine {
+class PlayerController(context: Context) : PlayerEngine {
 
     private val audio = AudioCodecEngine()
     private val video = MediaCodecEngine(
-        clock = audio,
-        context = context
+        context = context,
+        clock = audio
     )
 
     override val durationMs: Long
@@ -46,7 +44,7 @@ class PlayerController(
     }
 
     override fun seekTo(positionMs: Long) {
-        // D2-D+ already stable
+        video.seekTo(positionMs)
     }
 
     override fun release() {
