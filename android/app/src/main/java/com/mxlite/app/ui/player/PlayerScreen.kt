@@ -97,7 +97,7 @@ fun PlayerScreen(
                         object : android.view.SurfaceHolder.Callback {
                             override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                                 engine.attachSurface(holder.surface)
-                                engine.play(file)
+                                file?.let { engine.play(it) }
                             }
                             override fun surfaceChanged(
                                 holder: android.view.SurfaceHolder,
