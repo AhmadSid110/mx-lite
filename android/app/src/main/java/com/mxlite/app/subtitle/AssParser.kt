@@ -1,6 +1,7 @@
 package com.mxlite.app.subtitle
 
 import java.io.File
+import java.io.InputStream
 
 /**
  * Parser for ASS/SSA subtitle files.
@@ -19,11 +20,19 @@ object AssParser {
         val lines = file.readLines()
         return parseLines(lines)
     }
+
+    /**
+     * Parse an ASS/SSA stream into subtitle cues
+     */
+    fun parse(stream: InputStream): List<SubtitleCue> {
+        val lines = stream.bufferedReader().readLines()
+        return parseLines(lines)
+    }
     
     /**
      * Parse ASS/SSA lines into subtitle cues
      */
-    fun parseLines(lines: List<String>): List<SubtitleCue> {
+    private fun parseLines(lines: List<String>): List<SubtitleCue> {
         val cues = mutableListOf<SubtitleCue>()
         var inEventsSection = false
         var formatLine: String? = null
