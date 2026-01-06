@@ -42,6 +42,9 @@ private const val MaxSubtitleOpacity = 1f
 private const val MinBottomMargin = 16f
 private const val MaxBottomMargin = 120f
 private const val MaxSubtitleLines = 3
+private const val SubtitleShadowBlurRadius = 8f
+private const val PrefsSaveDebounceMs = 500L
+private const val MaxTrackDisplayNameLength = 15
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,7 +125,7 @@ fun PlayerScreen(
         selectedTrackId = savedPrefs.selectedTrackId
         
         // Initialize subtitle controller
-        subtitleController = SubtitleController(context, null)
+        subtitleController = SubtitleController(context)
         subtitleLine = null
         
         // Auto-load subtitle from same folder
@@ -159,7 +162,7 @@ fun PlayerScreen(
         subtitleBottomMargin
     ) {
         // Debounce saves
-        delay(500)
+        delay(PrefsSaveDebounceMs)
         prefsStore.save(
             videoId,
             SubtitlePrefsStore.SubtitlePrefs(
@@ -268,7 +271,7 @@ fun PlayerScreen(
                             style = TextStyle(
                                 shadow = Shadow(
                                     color = Color.Black,
-                                    blurRadius = 8f
+                                    blurRadius = SubtitleShadowBlurRadius
                                 )
                             ),
                             modifier = Modifier
@@ -385,7 +388,7 @@ fun PlayerScreen(
                                     }
                                 ) {
                                     Text(
-                                        text = track.displayName.take(15),
+                                        text = track.displayName.take(MaxTrackDisplayNameLength),
                                         color = if (selectedTrackId == track.id)
                                             MaterialTheme.colorScheme.primary
                                         else

@@ -8,22 +8,14 @@ import android.net.Uri
  * Supports multiple tracks and track switching.
  */
 class SubtitleController(
-    private val context: Context,
-    initialTrack: SubtitleTrack? = null
+    private val context: Context
 ) {
     private var subtitles: List<SubtitleCue> = emptyList()
     private var currentIndex = 0
-    private var _currentTrack: SubtitleTrack? = initialTrack
+    private var _currentTrack: SubtitleTrack? = null
     
     val currentTrack: SubtitleTrack? get() = _currentTrack
     val availableTracks = mutableListOf<SubtitleTrack>()
-
-    init {
-        initialTrack?.let { track ->
-            availableTracks.add(track)
-            loadTrack(track)
-        }
-    }
 
     /**
      * Add a subtitle track to available tracks
