@@ -5,9 +5,9 @@ import android.net.Uri
 import android.content.Intent
 
 fun persistTreePermission(context: Context, uri: Uri) {
-    context.contentResolver.takePersistableUriPermission(
-        uri,
+    val flags =
         Intent.FLAG_GRANT_READ_URI_PERMISSION or
-            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-    )
+        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+
+    context.contentResolver.takePersistableUriPermission(uri, flags)
 }
