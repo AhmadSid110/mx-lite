@@ -17,8 +17,10 @@ class MediaCodecEngine(
     private var running = false
 
     override val durationMs: Long = 0
+
     override val currentPositionMs: Long
         get() = clock.positionMs
+
     override val isPlaying: Boolean
         get() = running
 
@@ -50,16 +52,13 @@ class MediaCodecEngine(
         }
     }
 
-    override fun play(uri: android.net.Uri) {
-        throw IllegalStateException("SAF playback not implemented yet")
-    }
-
     private fun decodeLoop() {
         val codec = codec ?: return
         val extractor = extractor ?: return
         val info = MediaCodec.BufferInfo()
 
         while (running) {
+
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 val buffer = codec.getInputBuffer(inIndex)!!
@@ -67,13 +66,19 @@ class MediaCodecEngine(
 
                 if (size < 0) {
                     codec.queueInputBuffer(
-                        inIndex, 0, 0, 0,
+                        inIndex,
+                        0,
+                        0,
+                        0,
                         MediaCodec.BUFFER_FLAG_END_OF_STREAM
                     )
                 } else {
                     codec.queueInputBuffer(
-                        inIndex, 0, size,
-                        extractor.sampleTime, 0
+                        inIndex,
+                        0,
+                        size,
+                        extractor.sampleTime,
+                        0
                     )
                     extractor.advance()
                 }
@@ -85,9 +90,15 @@ class MediaCodecEngine(
                 val audioMs = clock.positionMs
                 val delta = videoPtsMs - audioMs
 
-                if (delta > 30) Thread.sleep(delta)
-                if (delta >= -50) codec.releaseOutputBuffer(outIndex, true)
-                else codec.releaseOutputBuffer(outIndex, false)
+                when {
+                    delta > 30 -> Thread.sleep(delta)
+                    delta < -50 -> {
+                        codec.releaseOutputBuffer(outIndex, false)
+                        continue
+                    }
+                }
+
+                codec.releaseOutputBuffer(outIndex, true)
             }
 
             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
@@ -108,7 +119,7 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
-        // D2-D+
+        // Implemented in D2-D+
     }
 
     override fun release() {
