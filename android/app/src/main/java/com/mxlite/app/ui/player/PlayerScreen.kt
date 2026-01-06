@@ -35,10 +35,12 @@ fun PlayerScreen(
     var seekPositionMs by remember { mutableStateOf(0L) }
 
     val subtitleController = remember(file) {
-        val srt = File(file.parentFile, file.nameWithoutExtension + ".srt")
-        if (srt.exists())
-            SubtitleController(SrtParser.parse(srt))
-        else null
+        file.parentFile?.let { parent ->
+            val srt = File(parent, file.nameWithoutExtension + ".srt")
+            if (srt.exists())
+                SubtitleController(SrtParser.parse(srt))
+            else null
+        }
     }
 
     // ⏱ Poll engine clock
@@ -115,7 +117,7 @@ fun PlayerScreen(
                 }
             )
 
-            if (subtitleLine != null) {
+            subtitleLine?.let { line ->
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -124,7 +126,7 @@ fun PlayerScreen(
                     contentAlignment = Alignment.BottomCenter
                 ) {
                     Text(
-                        text = subtitleLine!!.text,
+                        text = line.text,
                         color = Color.White,
                         textAlign = TextAlign.Center,
                         style = MaterialTheme.typography.bodyLarge,
