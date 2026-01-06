@@ -94,17 +94,7 @@ jobs:
           org.gradle.daemon=false
           EOF
 
-      # ─────────────────────────────────────────────
-      # 7️⃣ VERIFY KOTLIN VERSION
-      # ─────────────────────────────────────────────
-      - name: Verify Kotlin version
-        working-directory: android
-        run: |
-          chmod +x gradlew
-          echo "=== Kotlin Compiler Classpath ==="
-          ./gradlew -q kotlinCompilerClasspath || echo "Kotlin version check skipped"
-
-      # ─────────────────────────────────────────────
+      
       # 8️⃣ BUILD APK
       # ─────────────────────────────────────────────
       - name: Build Debug APK
