@@ -4,9 +4,12 @@ import java.io.File
 
 object SrtParser {
 
-    fun parse(file: File): List<SubtitleLine> {
-        val lines = file.readLines()
-        val out = mutableListOf<SubtitleLine>()
+    fun parse(file: File): List<SubtitleCue> {
+        return parseLines(file.readLines())
+    }
+
+    fun parseLines(lines: List<String>): List<SubtitleCue> {
+        val out = mutableListOf<SubtitleCue>()
         var i = 0
 
         while (i < lines.size) {
@@ -38,7 +41,7 @@ object SrtParser {
                 textIndex++
             }
 
-            out += SubtitleLine(
+            out += SubtitleCue(
                 startMs = start,
                 endMs = end,
                 text = text.toString().trim()
