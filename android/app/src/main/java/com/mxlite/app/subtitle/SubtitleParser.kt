@@ -10,7 +10,10 @@ object SubtitleParser {
 
     suspend fun parseFile(file: File): List<SubtitleCue> = withContext(Dispatchers.IO) {
         if (!file.exists()) return@withContext emptyList()
-        runCatching { parseLines(file.readLines()) }.getOrElse { emptyList() }
+        runCatching { 
+            val format = detectFormat(file)
+            format.getCues()
+        }.getOrElse { emptyList() }
     }
 
     suspend fun parseUri(context: Context, uri: Uri): List<SubtitleCue> =
@@ -18,12 +21,46 @@ object SubtitleParser {
             runCatching {
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val lines = stream.bufferedReader().readLines()
-                    parseLines(lines)
+                    val format = detectFormatFromLines(lines)
+                    format.getCues()
                 } ?: emptyList()
             }.getOrElse { emptyList() }
         }
+    
+    /**
+     * Detect subtitle format from file
+     */
+    private fun detectFormat(file: File): SubtitleFormat {
+        val lines = file.readLines()
+        return detectFormatFromLines(lines)
+    }
+    
+    /**
+     * Detect subtitle format from lines
+     */
+    private fun detectFormatFromLines(lines: List<String>): SubtitleFormat {
+        // Check for ASS/SSA format markers
+        val hasAssMarkers = lines.any { line ->
+            val trimmed = line.trim()
+            trimmed.startsWith("[Script Info]", ignoreCase = true) ||
+            trimmed.startsWith("[Events]", ignoreCase = true) ||
+            trimmed.startsWith("Format:", ignoreCase = true) ||
+            trimmed.startsWith("Dialogue:", ignoreCase = true)
+        }
+        
+        return if (hasAssMarkers) {
+            // Parse as ASS
+            SubtitleFormat.Ass(AssParser.parseLines(lines))
+        } else {
+            // Parse as SRT (default)
+            SubtitleFormat.Srt(parseSrtLines(lines))
+        }
+    }
 
-    private fun parseLines(lines: List<String>): List<SubtitleCue> {
+    /**
+     * Parse SRT format lines
+     */
+    private fun parseSrtLines(lines: List<String>): List<SubtitleCue> {
         val out = mutableListOf<SubtitleCue>()
         var i = 0
 
