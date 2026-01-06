@@ -22,18 +22,14 @@ class PlayerController : PlayerEngine {
         video.attachSurface(surface)
     }
 
-    // ───────── FILE PLAYBACK (WORKING) ─────────
     override fun play(file: File) {
         audio.reset()
         audio.play()
         video.play(file)
     }
 
-    // ───────── SAF PLAYBACK (COMING IN SAF-5) ─────────
     override fun play(uri: Uri) {
-        throw IllegalStateException(
-            "SAF playback not implemented yet (SAF-5)"
-        )
+        throw IllegalStateException("SAF playback not implemented yet")
     }
 
     override fun pause() {
@@ -41,9 +37,7 @@ class PlayerController : PlayerEngine {
         video.pause()
     }
 
-    override fun seekTo(positionMs: Long) {
-        // Implemented in D2-D+
-    }
+    override fun seekTo(positionMs: Long) {}
 
     override fun release() {
         audio.pause()
