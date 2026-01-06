@@ -48,6 +48,10 @@ dependencies {
     // Media
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-ui:1.2.1")
+    // ─────────────────────────────────────────────
+    // ✅ REQUIRED EXPLICIT DEPENDENCIES (DO NOT REMOVE)
+    // Fixes GitHub Actions Maven 403 failures
+    // ─────────────────────────────────────────────
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutinesVersion")
 }
