@@ -1,11 +1,29 @@
 package com.mxlite.app.subtitle
 
+import android.content.Context
+import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
-object SrtParser {
+object SubtitleParser {
 
-    fun parse(file: File): List<SubtitleCue> {
-        val lines = file.readLines()
+    suspend fun parseFile(file: File): List<SubtitleCue> = withContext(Dispatchers.IO) {
+        if (!file.exists()) return@withContext emptyList()
+        runCatching { parseLines(file.readLines()) }.getOrElse { emptyList() }
+    }
+
+    suspend fun parseUri(context: Context, uri: Uri): List<SubtitleCue> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val lines = stream.bufferedReader().readLines()
+                    parseLines(lines)
+                } ?: emptyList()
+            }.getOrElse { emptyList() }
+        }
+
+    private fun parseLines(lines: List<String>): List<SubtitleCue> {
         val out = mutableListOf<SubtitleCue>()
         var i = 0
 
