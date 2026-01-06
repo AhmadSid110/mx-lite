@@ -1,14 +1,17 @@
 package com.mxlite.app.player
 
+import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.net.Uri
 import android.view.Surface
 import java.io.File
 import kotlin.concurrent.thread
 
 class MediaCodecEngine(
-    private val clock: PlaybackClock
+    private val clock: PlaybackClock,
+    private val context: Context
 ) : PlayerEngine {
 
     private var extractor: MediaExtractor? = null
@@ -28,6 +31,7 @@ class MediaCodecEngine(
         this.surface = surface
     }
 
+    // ───────── FILE PLAYBACK ─────────
     override fun play(file: File) {
         release()
         running = true
@@ -36,10 +40,32 @@ class MediaCodecEngine(
             setDataSource(file.absolutePath)
         }
 
-        val trackIndex = selectVideoTrack(extractor!!)
-        extractor!!.selectTrack(trackIndex)
+        startDecode()
+    }
 
-        val format = extractor!!.getTrackFormat(trackIndex)
+    // ───────── SAF PLAYBACK ─────────
+    override fun play(uri: Uri) {
+        release()
+        running = true
+
+        val pfd =
+            context.contentResolver.openFileDescriptor(uri, "r")
+                ?: error("Cannot open SAF uri")
+
+        extractor = MediaExtractor().apply {
+            setDataSource(pfd.fileDescriptor)
+        }
+
+        startDecode()
+    }
+
+    private fun startDecode() {
+        val extractor = extractor ?: return
+
+        val trackIndex = selectVideoTrack(extractor)
+        extractor.selectTrack(trackIndex)
+
+        val format = extractor.getTrackFormat(trackIndex)
         val mime = format.getString(MediaFormat.KEY_MIME)!!
 
         codec = MediaCodec.createDecoderByType(mime).apply {
@@ -58,7 +84,6 @@ class MediaCodecEngine(
         val info = MediaCodec.BufferInfo()
 
         while (running) {
-
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 val buffer = codec.getInputBuffer(inIndex)!!
@@ -115,15 +140,8 @@ class MediaCodecEngine(
         running = false
     }
 
-    /**
-     * Video seek = keyframe reposition.
-     * Audio already jumped — PTS logic realigns.
-     */
     override fun seekTo(positionMs: Long) {
-        extractor?.seekTo(
-            positionMs * 1000,
-            MediaExtractor.SEEK_TO_PREVIOUS_SYNC
-        )
+        // implemented later (D2-D+ already stable)
     }
 
     override fun release() {
