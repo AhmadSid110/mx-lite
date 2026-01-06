@@ -63,14 +63,21 @@ class SubtitlePrefsStore(private val context: Context) {
             store[floatPreferencesKey("${videoId}_fontSizeSp")] = prefs.fontSizeSp
             store[intPreferencesKey("${videoId}_textColor")] = prefs.textColor.toArgb()
             store[floatPreferencesKey("${videoId}_bgOpacity")] = prefs.bgOpacity
-            prefs.selectedTrackId?.let {
-                store[stringPreferencesKey("${videoId}_selectedTrackId")] = it
+            
+            val trackIdKey = stringPreferencesKey("${videoId}_selectedTrackId")
+            if (prefs.selectedTrackId != null) {
+                store[trackIdKey] = prefs.selectedTrackId
+            } else {
+                store.remove(trackIdKey)
             }
+            
             store[floatPreferencesKey("${videoId}_bottomMarginDp")] = prefs.bottomMarginDp
         }
     }
 
     companion object {
+        private const val VIDEO_ID_HASH_LENGTH = 16
+        
         /**
          * Generate a unique video ID from a file path
          */
@@ -87,7 +94,7 @@ class SubtitlePrefsStore(private val context: Context) {
 
         private fun hashString(input: String): String {
             val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-            return bytes.joinToString("") { "%02x".format(it) }.take(16)
+            return bytes.joinToString("") { "%02x".format(it) }.take(VIDEO_ID_HASH_LENGTH)
         }
     }
 }
