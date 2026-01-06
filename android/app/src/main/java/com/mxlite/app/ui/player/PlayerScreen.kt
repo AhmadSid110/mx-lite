@@ -19,7 +19,8 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
-    file: File,
+    file: File?,
+    safUri: Uri?,
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
