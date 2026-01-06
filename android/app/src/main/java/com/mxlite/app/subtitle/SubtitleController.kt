@@ -1,11 +1,11 @@
 package com.mxlite.app.subtitle
 
 class SubtitleController(
-    private val subtitles: List<SubtitleLine>
+    private val subtitles: List<SubtitleCue>
 ) {
     private var currentIndex = 0
 
-    fun current(positionMs: Long): SubtitleLine? {
+    fun current(positionMs: Long): SubtitleCue? {
         if (subtitles.isEmpty()) return null
         while (currentIndex > 0 && positionMs < subtitles[currentIndex].startMs) {
             currentIndex--
