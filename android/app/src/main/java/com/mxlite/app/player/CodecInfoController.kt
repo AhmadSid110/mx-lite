@@ -69,7 +69,8 @@ object CodecInfoController {
      * Checks if a decoder is available and its characteristics.
      */
     fun detectCodecCapability(mimeType: String): CodecCapability {
-        val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
+        // Use REGULAR_CODECS to only include decoders (not encoders)
+        val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
         
         // Create appropriate format based on MIME type
         val format = if (mimeType.startsWith("video/")) {
@@ -137,10 +138,14 @@ object CodecInfoController {
      */
     private fun isHardwareAccelerated(codecInfo: MediaCodecInfo): Boolean {
         return try {
-            // Check if it's NOT software-only
-            // Note: isAlias requires API 29+, so we skip it for compatibility
-            val name = codecInfo.name.lowercase()
-            !name.contains("sw") && !name.contains("google")
+            // Use isHardwareAccelerated() on API 29+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                codecInfo.isHardwareAccelerated
+            } else {
+                // Fallback to string pattern matching for older versions
+                val name = codecInfo.name.lowercase()
+                !name.contains("sw") && !name.contains("google")
+            }
         } catch (e: Exception) {
             false
         }
