@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,6 +32,9 @@ import com.mxlite.app.player.PlayerEngine
 import com.mxlite.app.player.AudioTrackInfo
 import com.mxlite.app.player.AudioTrackExtractor
 import com.mxlite.app.player.AudioTrackPrefsStore
+import com.mxlite.app.player.CodecInfoController
+import com.mxlite.app.player.TrackCodecInfo
+import com.mxlite.app.player.CodecCapability
 import com.mxlite.app.subtitle.SubtitleController
 import com.mxlite.app.subtitle.SubtitleCue
 import com.mxlite.app.subtitle.SubtitlePrefsStore
@@ -93,6 +98,12 @@ fun PlayerScreen(
     var availableAudioTracks by remember { mutableStateOf<List<AudioTrackInfo>>(emptyList()) }
     var selectedAudioTrackIndex by remember { mutableStateOf<Int?>(null) }
     var showAudioTrackSelector by remember { mutableStateOf(false) }
+    
+    // Codec info state
+    var showCodecInfo by remember { mutableStateOf(false) }
+    var codecInfoList by remember { mutableStateOf<List<Pair<TrackCodecInfo, CodecCapability>>>(emptyList()) }
+    var showUnsupportedCodecWarning by remember { mutableStateOf(false) }
+    var unsupportedCodecs by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val subtitlePicker =
         rememberLauncherForActivityResult(
@@ -143,6 +154,19 @@ fun PlayerScreen(
         // Load available audio tracks
         availableAudioTracks = AudioTrackExtractor.extractAudioTracks(file)
         selectedAudioTrackIndex = audioTrackPrefsStore.loadTrackIndex(videoId)
+        
+        // Extract codec information (only once)
+        codecInfoList = CodecInfoController.getFileCodecInfo(file)
+        
+        // Filter for unsupported codecs from existing result
+        unsupportedCodecs = codecInfoList
+            .filter { !it.second.isSupported }
+            .map { it.first.mimeType }
+        
+        // Show warning if unsupported codecs detected
+        if (unsupportedCodecs.isNotEmpty()) {
+            showUnsupportedCodecWarning = true
+        }
         
         // Initialize subtitle controller
         subtitleController = SubtitleController(context)
@@ -498,7 +522,50 @@ fun PlayerScreen(
                         }
                     }
                 }
+                
+                // Codec Info Section
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        Text("Codec Info", style = MaterialTheme.typography.titleSmall)
+                        if (unsupportedCodecs.isNotEmpty()) {
+                            Text(
+                                text = "⚠️ ${unsupportedCodecs.size} unsupported codec(s)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    OutlinedButton(onClick = { showCodecInfo = true }) {
+                        Text("View")
+                    }
+                }
             }
+        }
+        
+        // Codec Info Dialog
+        if (showCodecInfo) {
+            CodecInfoDialog(
+                codecInfo = codecInfoList,
+                onDismiss = { showCodecInfo = false }
+            )
+        }
+        
+        // Unsupported Codec Warning Dialog
+        if (showUnsupportedCodecWarning) {
+            UnsupportedCodecWarningDialog(
+                unsupportedCodecs = unsupportedCodecs,
+                onDismiss = { showUnsupportedCodecWarning = false },
+                onViewDetails = { 
+                    showUnsupportedCodecWarning = false
+                    showCodecInfo = true
+                }
+            )
         }
         
         // Audio Track Selector Dialog
@@ -673,3 +740,204 @@ fun AudioTrackSelectorDialog(
         }
     )
 }
+
+/**
+ * Codec Info Dialog.
+ * Displays comprehensive codec information for all tracks in the media file.
+ * Shows video and audio codec support, decoder names, and hardware/software status.
+ */
+@Composable
+fun CodecInfoDialog(
+    codecInfo: List<Pair<TrackCodecInfo, CodecCapability>>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Codec Information") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (codecInfo.isEmpty()) {
+                    Text(
+                        text = "No codec information available",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                } else {
+                    // Group by track type
+                    val videoTracks = codecInfo.filter { 
+                        it.first.trackType == TrackCodecInfo.TrackType.VIDEO 
+                    }
+                    val audioTracks = codecInfo.filter { 
+                        it.first.trackType == TrackCodecInfo.TrackType.AUDIO 
+                    }
+                    
+                    // Video Codecs Section
+                    if (videoTracks.isNotEmpty()) {
+                        Text(
+                            text = "Video Codecs",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        
+                        videoTracks.forEach { (track, capability) ->
+                            CodecInfoItem(track = track, capability = capability)
+                        }
+                    }
+                    
+                    // Audio Codecs Section
+                    if (audioTracks.isNotEmpty()) {
+                        if (videoTracks.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        
+                        Text(
+                            text = "Audio Codecs",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        
+                        audioTracks.forEach { (track, capability) ->
+                            CodecInfoItem(track = track, capability = capability)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+/**
+ * Individual codec info item display.
+ * Shows codec details including support status, decoder name, and type.
+ */
+@Composable
+fun CodecInfoItem(
+    track: TrackCodecInfo,
+    capability: CodecCapability
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (capability.isSupported) 
+                MaterialTheme.colorScheme.surfaceVariant
+            else 
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = track.displayMimeType.uppercase(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                Text(
+                    text = if (capability.isSupported) "✓ Supported" else "✗ Not Supported",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (capability.isSupported) 
+                        MaterialTheme.colorScheme.primary
+                    else 
+                        MaterialTheme.colorScheme.error
+                )
+            }
+            
+            if (capability.isSupported && capability.decoderName != null) {
+                Text(
+                    text = "Decoder: ${capability.decoderName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Text(
+                    text = "Type: ${capability.displayDecoderType}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (!capability.isSupported) {
+                Text(
+                    text = "No decoder available for this codec",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Unsupported Codec Warning Dialog.
+ * Shown before playback if unsupported codecs are detected.
+ * Explains which codecs failed and why.
+ */
+@Composable
+fun UnsupportedCodecWarningDialog(
+    unsupportedCodecs: List<String>,
+    onDismiss: () -> Unit,
+    onViewDetails: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Text("⚠️", fontSize = 32.sp)
+        },
+        title = { 
+            Text("Unsupported Codecs Detected") 
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "This media file contains ${unsupportedCodecs.size} codec(s) that may not be playable on this device:",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                unsupportedCodecs.forEach { codec ->
+                    Text(
+                        text = "• ${codec.removePrefix("video/").removePrefix("audio/")}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Playback may fail or show a black screen. Consider converting the file to a supported format.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onViewDetails) {
+                Text("View Details")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Continue Anyway")
+            }
+        }
+    )
+}
+
