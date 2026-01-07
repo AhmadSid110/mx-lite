@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
 
         requestMediaPermissionsIfNeeded()
 
-        // 🔒 SAF permission recovery (CRITICAL)
+        // 🔒 SAF permission recovery
         lifecycleScope.launch {
             StorageStore(this@MainActivity).cleanup()
         }
@@ -43,29 +43,44 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Android media permission request (filesystem playback)
+     * Runtime media permission request
      */
     private fun requestMediaPermissionsIfNeeded() {
+
         if (Build.VERSION.SDK_INT >= 33) {
-            val permissions = arrayOf(
-                Manifest.permission.READ_MEDIA_VIDEO,
-                Manifest.permission.READ_MEDIA_AUDIO
-            )
 
-            val missing = permissions.any {
-                ContextCompat.checkSelfPermission(this, it)
-                        != PackageManager.PERMISSION_GRANTED
+            val videoGranted =
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_MEDIA_VIDEO
+                ) == PackageManager.PERMISSION_GRANTED
+
+            val audioGranted =
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_MEDIA_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+
+            if (!videoGranted || !audioGranted) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_VIDEO,
+                        Manifest.permission.READ_MEDIA_AUDIO
+                    ),
+                    100
+                )
             }
 
-            if (missing) {
-                ActivityCompat.requestPermissions(this, permissions, 100)
-            }
         } else {
-            if (ContextCompat.checkSelfPermission(
+
+            val storageGranted =
+                ContextCompat.checkSelfPermission(
                     this,
                     Manifest.permission.READ_EXTERNAL_STORAGE
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
+                ) == PackageManager.PERMISSION_GRANTED
+
+            if (!storageGranted) {
                 ActivityCompat.requestPermissions(
                     this,
                     arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
@@ -76,7 +91,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Call this AFTER folder picker returns a URI
+     * SAF tree permission persistence
      */
     fun persistTreePermission(uri: Uri) {
         val flags =
