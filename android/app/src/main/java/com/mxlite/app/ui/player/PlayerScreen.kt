@@ -229,7 +229,8 @@ fun PlayerScreen(
                 durationMs = engine.durationMs
             }
             // Adjust position for playback speed and subtitle offset
-            val adjustedPositionMs = (engine.currentPositionMs / playbackSpeed).toLong()
+            // At 2x speed, video advances faster, so we scale up time for subtitle matching
+            val adjustedPositionMs = (engine.currentPositionMs * playbackSpeed).toLong()
             val effectiveTimeMs = (adjustedPositionMs + subtitleOffsetMs).coerceAtLeast(0L)
             subtitleLine = subtitleController?.current(effectiveTimeMs)
             delay(500)
@@ -310,7 +311,8 @@ fun PlayerScreen(
                     ) {
                         OutlinedSubtitleText(
                             text = line.text,
-                            fontSizeSp = line.style.fontSizeSp ?: subtitleFontSizeSp,
+                            fontSizeSp = (line.style.fontSizeSp ?: subtitleFontSizeSp)
+                                .coerceIn(MinSubtitleFontSize, MaxSubtitleFontSize),
                             textColor = line.style.color ?: subtitleColor,
                             outlineColor = Color.Black,
                             outlineWidthDp = 3f,

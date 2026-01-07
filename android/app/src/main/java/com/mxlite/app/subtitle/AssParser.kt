@@ -224,7 +224,7 @@ object AssParser {
                 val bb = cleanHex.substring(0, 2).toInt(16)
                 val gg = cleanHex.substring(2, 4).toInt(16)
                 val rr = cleanHex.substring(4, 6).toInt(16)
-                Color(red = rr, green = gg, blue = bb)
+                Color(red = rr / 255f, green = gg / 255f, blue = bb / 255f)
             } else {
                 null
             }
