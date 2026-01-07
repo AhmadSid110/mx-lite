@@ -13,6 +13,7 @@ class AudioCodecEngine : PlaybackClock {
     private var audioTrack: AudioTrack? = null
 
     private var playing = false
+    @Volatile
     private var playedSamples = 0L
     private var sampleRate = 44100
 
