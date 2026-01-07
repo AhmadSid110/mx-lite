@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -840,7 +842,7 @@ fun CodecInfoItem(
                 Text(
                     text = track.displayMimeType.uppercase(),
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    fontWeight = FontWeight.Bold
                 )
                 
                 Text(
@@ -908,7 +910,7 @@ fun UnsupportedCodecWarningDialog(
                     Text(
                         text = "• ${codec.removePrefix("video/").removePrefix("audio/")}",
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }

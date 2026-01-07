@@ -42,8 +42,9 @@ object CodecInfoController {
                     continue
                 }
                 
-                // Try to get codec name from format
-                val codecName = if (format.containsKey(MediaFormat.KEY_CODECS_STRING)) {
+                // Try to get codec name from format (API 29+)
+                val codecName = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                    format.containsKey(MediaFormat.KEY_CODECS_STRING)) {
                     format.getString(MediaFormat.KEY_CODECS_STRING)
                 } else null
                 
@@ -137,9 +138,9 @@ object CodecInfoController {
     private fun isHardwareAccelerated(codecInfo: MediaCodecInfo): Boolean {
         return try {
             // Check if it's NOT software-only
-            !codecInfo.isAlias && 
-            !codecInfo.name.lowercase().contains("sw") &&
-            !codecInfo.name.lowercase().contains("google")
+            // Note: isAlias requires API 29+, so we skip it for compatibility
+            val name = codecInfo.name.lowercase()
+            !name.contains("sw") && !name.contains("google")
         } catch (e: Exception) {
             false
         }
