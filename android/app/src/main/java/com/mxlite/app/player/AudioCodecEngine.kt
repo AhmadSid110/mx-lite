@@ -130,6 +130,14 @@ class AudioCodecEngine : PlaybackClock {
         playing = false
     }
 
+    fun seekTo(positionMs: Long) {
+        extractor?.seekTo(
+            positionMs * 1000,
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
+        playedSamples = (positionMs * sampleRate) / 1000
+    }
+
     fun reset() {
         playedSamples = 0
     }

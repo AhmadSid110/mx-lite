@@ -132,7 +132,10 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
-        // D2-D+ (future)
+        extractor?.seekTo(
+            positionMs * 1000,
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
     }
 
     override fun release() {
