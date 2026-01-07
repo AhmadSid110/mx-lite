@@ -20,8 +20,8 @@ android {
     }
 
     composeOptions {
-        // ✅ Correct for Kotlin 1.9.x + Compose 1.6.x
-        kotlinCompilerExtensionVersion = "1.5.8"
+        // ✅ Correct for Kotlin 1.9.0 + Compose 1.5.x
+        kotlinCompilerExtensionVersion = "1.5.2"
     }
 
     compileOptions {
