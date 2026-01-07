@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -26,6 +27,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.player.PlayerEngine
+import com.mxlite.app.player.AudioTrackInfo
+import com.mxlite.app.player.AudioTrackExtractor
+import com.mxlite.app.player.AudioTrackPrefsStore
 import com.mxlite.app.subtitle.SubtitleController
 import com.mxlite.app.subtitle.SubtitleCue
 import com.mxlite.app.subtitle.SubtitlePrefsStore
@@ -34,7 +38,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
-private val SubtitleMimeTypes = arrayOf("application/x-subrip", "text/plain", "text/x-srt")
+private val SubtitleMimeTypes = arrayOf(
+    "application/x-subrip",
+    "text/plain", 
+    "text/x-srt",
+    "text/x-ssa",
+    "text/x-ass"
+)
 private const val MinSubtitleFontSize = 12f
 private const val MaxSubtitleFontSize = 28f
 private const val MinSubtitleOpacity = 0f
@@ -57,6 +67,7 @@ fun PlayerScreen(
     val scope = rememberCoroutineScope()
     
     val prefsStore = remember { SubtitlePrefsStore(context) }
+    val audioTrackPrefsStore = remember { AudioTrackPrefsStore(context) }
     val videoId = remember(file) { SubtitlePrefsStore.videoIdFromFile(file) }
 
     var positionMs by remember { mutableStateOf(0L) }
@@ -77,6 +88,11 @@ fun PlayerScreen(
     var subtitleError by remember { mutableStateOf<String?>(null) }
     var selectedTrackId by remember { mutableStateOf<String?>(null) }
     var showTrackSelector by remember { mutableStateOf(false) }
+    
+    // Audio track selection state
+    var availableAudioTracks by remember { mutableStateOf<List<AudioTrackInfo>>(emptyList()) }
+    var selectedAudioTrackIndex by remember { mutableStateOf<Int?>(null) }
+    var showAudioTrackSelector by remember { mutableStateOf(false) }
 
     val subtitlePicker =
         rememberLauncherForActivityResult(
@@ -124,6 +140,10 @@ fun PlayerScreen(
         subtitleBottomMargin = savedPrefs.bottomMarginDp
         selectedTrackId = savedPrefs.selectedTrackId
         
+        // Load available audio tracks
+        availableAudioTracks = AudioTrackExtractor.extractAudioTracks(file)
+        selectedAudioTrackIndex = audioTrackPrefsStore.loadTrackIndex(videoId)
+        
         // Initialize subtitle controller
         subtitleController = SubtitleController(context)
         subtitleLine = null
@@ -131,19 +151,28 @@ fun PlayerScreen(
         // Auto-load subtitle from same folder
         val parent = file.parentFile
         if (parent != null) {
-            val srt = File(parent, file.nameWithoutExtension + ".srt")
-            if (srt.exists()) {
-                val track = SubtitleTrack.FileTrack(srt)
-                subtitleController?.addTrack(track)
-                
-                // Restore saved track or use default
-                if (savedPrefs.selectedTrackId == track.id) {
-                    subtitleController?.selectTrack(track.id)
-                    selectedTrackId = track.id
-                } else if (savedPrefs.selectedTrackId == null) {
-                    // No saved preference, use default track
-                    subtitleController?.selectTrack(track.id)
-                    selectedTrackId = track.id
+            // Try SRT first, then ASS
+            val subtitleFiles = listOf(
+                File(parent, file.nameWithoutExtension + ".srt"),
+                File(parent, file.nameWithoutExtension + ".ass"),
+                File(parent, file.nameWithoutExtension + ".ssa")
+            )
+            
+            for (subtitleFile in subtitleFiles) {
+                if (subtitleFile.exists()) {
+                    val track = SubtitleTrack.FileTrack(subtitleFile)
+                    subtitleController?.addTrack(track)
+                    
+                    // Restore saved track or use default
+                    if (savedPrefs.selectedTrackId == track.id) {
+                        subtitleController?.selectTrack(track.id)
+                        selectedTrackId = track.id
+                    } else if (savedPrefs.selectedTrackId == null) {
+                        // No saved preference, use first available track
+                        subtitleController?.selectTrack(track.id)
+                        selectedTrackId = track.id
+                    }
+                    break  // Use first found subtitle file
                 }
             }
         }
@@ -262,18 +291,12 @@ fun PlayerScreen(
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.BottomCenter
                     ) {
-                        Text(
+                        OutlinedSubtitleText(
                             text = line.text,
-                            color = subtitleColor,
-                            textAlign = TextAlign.Center,
-                            fontSize = subtitleFontSizeSp.sp,
-                            maxLines = MaxSubtitleLines,
-                            style = TextStyle(
-                                shadow = Shadow(
-                                    color = Color.Black,
-                                    blurRadius = SubtitleShadowBlurRadius
-                                )
-                            ),
+                            fontSizeSp = subtitleFontSizeSp,
+                            textColor = subtitleColor,
+                            outlineColor = Color.Black,
+                            outlineWidthDp = 3f,
                             modifier = Modifier
                                 .background(
                                     Color.Black.copy(alpha = subtitleBgOpacity),
@@ -449,7 +472,51 @@ fun PlayerScreen(
                     selected = subtitleColor,
                     onColorSelected = { subtitleColor = it }
                 )
+                
+                // Audio Track Selection
+                if (availableAudioTracks.size > 1) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Audio Track", style = MaterialTheme.typography.titleSmall)
+                        OutlinedButton(onClick = { showAudioTrackSelector = true }) {
+                            Text("Select")
+                        }
+                    }
+                    
+                    selectedAudioTrackIndex?.let { index ->
+                        availableAudioTracks.find { it.trackIndex == index }?.let { track ->
+                            Text(
+                                text = track.displayName,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
             }
+        }
+        
+        // Audio Track Selector Dialog
+        if (showAudioTrackSelector) {
+            AudioTrackSelectorDialog(
+                tracks = availableAudioTracks,
+                selectedTrackIndex = selectedAudioTrackIndex,
+                onTrackSelected = { trackIndex ->
+                    scope.launch {
+                        selectedAudioTrackIndex = trackIndex
+                        audioTrackPrefsStore.saveTrackIndex(videoId, trackIndex)
+                        // Note: Actual track switching would require engine restart
+                        // which is beyond UI scope - user would need to re-open video
+                    }
+                    showAudioTrackSelector = false
+                },
+                onDismiss = { showAudioTrackSelector = false }
+            )
         }
     }
 }
@@ -459,6 +526,47 @@ private fun formatTime(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%02d:%02d".format(minutes, seconds)
+}
+
+/**
+ * OLED-optimized subtitle text with stroke outline.
+ * Uses double-draw technique: stroke layer + fill layer for crisp edges.
+ */
+@Composable
+fun OutlinedSubtitleText(
+    text: String,
+    fontSizeSp: Float,
+    textColor: Color,
+    outlineColor: Color,
+    outlineWidthDp: Float,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier) {
+        // First pass: Draw text with stroke (outline)
+        Text(
+            text = text,
+            color = outlineColor,
+            textAlign = TextAlign.Center,
+            fontSize = fontSizeSp.sp,
+            maxLines = MaxSubtitleLines,
+            style = TextStyle(
+                drawStyle = Stroke(
+                    width = outlineWidthDp
+                )
+            ),
+            modifier = Modifier.matchParentSize()
+        )
+        
+        // Second pass: Draw text filled (on top of stroke)
+        Text(
+            text = text,
+            color = textColor,
+            textAlign = TextAlign.Center,
+            fontSize = fontSizeSp.sp,
+            maxLines = MaxSubtitleLines,
+            modifier = Modifier.matchParentSize()
+        )
+    }
 }
 
 @Composable
@@ -499,4 +607,69 @@ fun SubtitleColorSelector(
             )
         }
     }
+}
+
+/**
+ * Audio track selector dialog.
+ * Displays available audio tracks with metadata and allows selection.
+ */
+@Composable
+fun AudioTrackSelectorDialog(
+    tracks: List<AudioTrackInfo>,
+    selectedTrackIndex: Int?,
+    onTrackSelected: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Select Audio Track") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                tracks.forEach { track ->
+                    val isSelected = selectedTrackIndex == track.trackIndex
+                    OutlinedButton(
+                        onClick = { onTrackSelected(track.trackIndex) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = if (isSelected) {
+                            ButtonDefaults.outlinedButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        } else {
+                            ButtonDefaults.outlinedButtonColors()
+                        }
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            Text(
+                                text = track.displayName,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = track.mimeType,
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+                }
+                
+                if (tracks.isEmpty()) {
+                    Text(
+                        text = "No audio tracks available",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
