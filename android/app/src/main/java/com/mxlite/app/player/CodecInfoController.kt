@@ -69,9 +69,18 @@ object CodecInfoController {
      */
     fun detectCodecCapability(mimeType: String): CodecCapability {
         val codecList = MediaCodecList(MediaCodecList.ALL_CODECS)
-        val decoderName = codecList.findDecoderForFormat(
+        
+        // Create appropriate format based on MIME type
+        val format = if (mimeType.startsWith("video/")) {
             MediaFormat.createVideoFormat(mimeType, 1920, 1080)
-        )
+        } else if (mimeType.startsWith("audio/")) {
+            MediaFormat.createAudioFormat(mimeType, 44100, 2)
+        } else {
+            // Fallback for unknown types
+            MediaFormat().apply { setString(MediaFormat.KEY_MIME, mimeType) }
+        }
+        
+        val decoderName = codecList.findDecoderForFormat(format)
         
         if (decoderName == null) {
             return CodecCapability(
