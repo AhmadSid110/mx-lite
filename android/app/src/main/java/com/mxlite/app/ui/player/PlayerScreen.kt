@@ -155,9 +155,13 @@ fun PlayerScreen(
         availableAudioTracks = AudioTrackExtractor.extractAudioTracks(file)
         selectedAudioTrackIndex = audioTrackPrefsStore.loadTrackIndex(videoId)
         
-        // Extract codec information
+        // Extract codec information (only once)
         codecInfoList = CodecInfoController.getFileCodecInfo(file)
-        unsupportedCodecs = CodecInfoController.getUnsupportedCodecs(file)
+        
+        // Filter for unsupported codecs from existing result
+        unsupportedCodecs = codecInfoList
+            .filter { !it.second.isSupported }
+            .map { it.first.mimeType }
         
         // Show warning if unsupported codecs detected
         if (unsupportedCodecs.isNotEmpty()) {
