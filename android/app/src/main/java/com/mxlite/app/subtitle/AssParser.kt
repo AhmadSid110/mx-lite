@@ -1,15 +1,17 @@
 package com.mxlite.app.subtitle
 
+import androidx.compose.ui.graphics.Color
 import java.io.File
 import java.io.InputStream
 
 /**
  * Parser for ASS/SSA subtitle files.
- * Extracts timing and text, ignoring advanced features like:
+ * Extracts timing, text, and basic styling (bold, italic, underline, color, font size).
+ * Ignores advanced features like:
  * - Karaoke effects
  * - Animations
  * - Vector drawing
- * - Complex formatting
+ * - Positioning tags
  */
 object AssParser {
     
@@ -97,13 +99,14 @@ object AssParser {
         // Extract text (everything from textIndex onward, joined with commas if split)
         val text = values.drop(textIndex).joinToString(",").trim()
         
-        // Strip ASS formatting codes
-        val cleanText = stripAssFormatting(text)
+        // Extract styling and clean text
+        val (cleanText, style) = extractStyleAndCleanText(text)
         
         return SubtitleCue(
             startMs = startTime,
             endMs = endTime,
-            text = cleanText
+            text = cleanText,
+            style = style
         )
     }
     
@@ -127,24 +130,106 @@ object AssParser {
     }
     
     /**
-     * Remove ASS formatting codes from text
-     * Handles: {\...}, {\\...}, and other override blocks
+     * Extract supported styling from ASS override blocks and clean text.
+     * Supported: bold (\b1), italic (\i1), underline (\u1), color (\c&H...), font size (\fs)
+     * Returns cleaned text and extracted style.
      */
-    private fun stripAssFormatting(text: String): String {
-        var result = text
+    private fun extractStyleAndCleanText(text: String): Pair<String, SubtitleStyle> {
+        var bold = false
+        var italic = false
+        var underline = false
+        var fontSizeSp: Float? = null
+        var color: Color? = null
         
-        // Remove override blocks: {...}
-        result = result.replace(Regex("""\{[^}]*\}"""), "")
+        // Find all override blocks {...}
+        val overrideRegex = Regex("""\{([^}]*)\}""")
+        val matches = overrideRegex.findAll(text)
+        
+        for (match in matches) {
+            val overrideContent = match.groupValues[1]
+            
+            // Parse override tags
+            val tags = overrideContent.split("\\").filter { it.isNotEmpty() }
+            for (tag in tags) {
+                when {
+                    // Bold: \b1 = bold on, \b0 = bold off
+                    tag.startsWith("b1") -> bold = true
+                    tag.startsWith("b0") -> bold = false
+                    
+                    // Italic: \i1 = italic on, \i0 = italic off
+                    tag.startsWith("i1") -> italic = true
+                    tag.startsWith("i0") -> italic = false
+                    
+                    // Underline: \u1 = underline on, \u0 = underline off
+                    tag.startsWith("u1") -> underline = true
+                    tag.startsWith("u0") -> underline = false
+                    
+                    // Font size: \fs<size>
+                    tag.startsWith("fs") -> {
+                        val size = tag.substring(2).toFloatOrNull()
+                        if (size != null && size > 0) {
+                            fontSizeSp = size
+                        }
+                    }
+                    
+                    // Primary color: \c&H<bbggrr>& or \c&HBBGGRR&
+                    tag.startsWith("c&H") && tag.endsWith("&") -> {
+                        val colorHex = tag.substring(3, tag.length - 1)
+                        color = parseAssColor(colorHex)
+                    }
+                    
+                    // Alternative color format: \1c&H<bbggrr>&
+                    tag.startsWith("1c&H") && tag.endsWith("&") -> {
+                        val colorHex = tag.substring(4, tag.length - 1)
+                        color = parseAssColor(colorHex)
+                    }
+                }
+            }
+        }
+        
+        // Remove all override blocks
+        var cleanText = text.replace(overrideRegex, "")
         
         // Replace \N (line break) with actual line break
-        result = result.replace("\\N", "\n")
+        cleanText = cleanText.replace("\\N", "\n")
         
         // Replace \n with line break (lowercase variant)
-        result = result.replace("\\n", "\n")
+        cleanText = cleanText.replace("\\n", "\n")
         
         // Replace \h with space (hard space)
-        result = result.replace("\\h", " ")
+        cleanText = cleanText.replace("\\h", " ")
         
-        return result.trim()
+        val style = SubtitleStyle(
+            bold = bold,
+            italic = italic,
+            underline = underline,
+            fontSizeSp = fontSizeSp,
+            color = color
+        )
+        
+        return Pair(cleanText.trim(), style)
+    }
+    
+    /**
+     * Parse ASS color format: &HBBGGRR or BBGGRR (BGR hex)
+     * ASS uses BGR format, not RGB
+     */
+    private fun parseAssColor(hex: String): Color? {
+        return try {
+            // Remove any leading/trailing whitespace or &H prefix
+            val cleanHex = hex.replace("&H", "").replace("&", "").trim()
+            
+            // Parse as BGR (6 digits expected)
+            if (cleanHex.length == 6) {
+                val bb = cleanHex.substring(0, 2).toInt(16)
+                val gg = cleanHex.substring(2, 4).toInt(16)
+                val rr = cleanHex.substring(4, 6).toInt(16)
+                Color(red = rr, green = gg, blue = bb)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 }

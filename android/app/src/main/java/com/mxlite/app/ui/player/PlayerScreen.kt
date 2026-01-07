@@ -30,6 +30,7 @@ import com.mxlite.app.player.PlayerEngine
 import com.mxlite.app.player.AudioTrackInfo
 import com.mxlite.app.player.AudioTrackExtractor
 import com.mxlite.app.player.AudioTrackPrefsStore
+import com.mxlite.app.player.PlaybackSpeedPrefsStore
 import com.mxlite.app.subtitle.SubtitleController
 import com.mxlite.app.subtitle.SubtitleCue
 import com.mxlite.app.subtitle.SubtitlePrefsStore
@@ -68,6 +69,7 @@ fun PlayerScreen(
     
     val prefsStore = remember { SubtitlePrefsStore(context) }
     val audioTrackPrefsStore = remember { AudioTrackPrefsStore(context) }
+    val playbackSpeedPrefsStore = remember { PlaybackSpeedPrefsStore(context) }
     val videoId = remember(file) { SubtitlePrefsStore.videoIdFromFile(file) }
 
     var positionMs by remember { mutableStateOf(0L) }
@@ -93,6 +95,9 @@ fun PlayerScreen(
     var availableAudioTracks by remember { mutableStateOf<List<AudioTrackInfo>>(emptyList()) }
     var selectedAudioTrackIndex by remember { mutableStateOf<Int?>(null) }
     var showAudioTrackSelector by remember { mutableStateOf(false) }
+    
+    // Playback speed state
+    var playbackSpeed by remember { mutableStateOf(1.0f) }
 
     val subtitlePicker =
         rememberLauncherForActivityResult(
@@ -139,6 +144,9 @@ fun PlayerScreen(
         subtitleBgOpacity = savedPrefs.bgOpacity
         subtitleBottomMargin = savedPrefs.bottomMarginDp
         selectedTrackId = savedPrefs.selectedTrackId
+        
+        // Load playback speed
+        playbackSpeed = playbackSpeedPrefsStore.loadSpeed(videoId)
         
         // Load available audio tracks
         availableAudioTracks = AudioTrackExtractor.extractAudioTracks(file)
@@ -206,6 +214,13 @@ fun PlayerScreen(
         )
     }
 
+    // Save playback speed when it changes
+    LaunchedEffect(playbackSpeed) {
+        // Debounce saves
+        delay(PrefsSaveDebounceMs)
+        playbackSpeedPrefsStore.saveSpeed(videoId, playbackSpeed)
+    }
+
     // ⏱ Poll engine clock
     LaunchedEffect(Unit) {
         while (true) {
@@ -213,7 +228,9 @@ fun PlayerScreen(
                 positionMs = engine.currentPositionMs
                 durationMs = engine.durationMs
             }
-            val effectiveTimeMs = (engine.currentPositionMs + subtitleOffsetMs).coerceAtLeast(0L)
+            // Adjust position for playback speed and subtitle offset
+            val adjustedPositionMs = (engine.currentPositionMs / playbackSpeed).toLong()
+            val effectiveTimeMs = (adjustedPositionMs + subtitleOffsetMs).coerceAtLeast(0L)
             subtitleLine = subtitleController?.current(effectiveTimeMs)
             delay(500)
         }
@@ -293,10 +310,11 @@ fun PlayerScreen(
                     ) {
                         OutlinedSubtitleText(
                             text = line.text,
-                            fontSizeSp = subtitleFontSizeSp,
-                            textColor = subtitleColor,
+                            fontSizeSp = line.style.fontSizeSp ?: subtitleFontSizeSp,
+                            textColor = line.style.color ?: subtitleColor,
                             outlineColor = Color.Black,
                             outlineWidthDp = 3f,
+                            style = line.style,
                             modifier = Modifier
                                 .background(
                                     Color.Black.copy(alpha = subtitleBgOpacity),
@@ -473,6 +491,35 @@ fun PlayerScreen(
                     onColorSelected = { subtitleColor = it }
                 )
                 
+                // Playback Speed Controls
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Text(
+                    text = "Playback Speed: ${playbackSpeed}x",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    listOf(0.5f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { speed ->
+                        OutlinedButton(
+                            onClick = { playbackSpeed = speed },
+                            modifier = Modifier.weight(1f),
+                            colors = if (playbackSpeed == speed) {
+                                ButtonDefaults.outlinedButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                )
+                            } else {
+                                ButtonDefaults.outlinedButtonColors()
+                            }
+                        ) {
+                            Text("${speed}x")
+                        }
+                    }
+                }
+                
                 // Audio Track Selection
                 if (availableAudioTracks.size > 1) {
                     Spacer(modifier = Modifier.height(12.dp))
@@ -531,6 +578,7 @@ private fun formatTime(ms: Long): String {
 /**
  * OLED-optimized subtitle text with stroke outline.
  * Uses double-draw technique: stroke layer + fill layer for crisp edges.
+ * Supports ASS/SSA styling: bold, italic, underline, color, font size.
  */
 @Composable
 fun OutlinedSubtitleText(
@@ -539,17 +587,25 @@ fun OutlinedSubtitleText(
     textColor: Color,
     outlineColor: Color,
     outlineWidthDp: Float,
+    style: com.mxlite.app.subtitle.SubtitleStyle = com.mxlite.app.subtitle.SubtitleStyle(),
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier) {
+        // Build text style with ASS styling applied
+        val baseTextStyle = TextStyle(
+            fontSize = fontSizeSp.sp,
+            fontWeight = if (style.bold) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
+            fontStyle = if (style.italic) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal,
+            textDecoration = if (style.underline) androidx.compose.ui.text.style.TextDecoration.Underline else null
+        )
+        
         // First pass: Draw text with stroke (outline)
         Text(
             text = text,
             color = outlineColor,
             textAlign = TextAlign.Center,
-            fontSize = fontSizeSp.sp,
             maxLines = MaxSubtitleLines,
-            style = TextStyle(
+            style = baseTextStyle.copy(
                 drawStyle = Stroke(
                     width = outlineWidthDp
                 )
@@ -562,8 +618,8 @@ fun OutlinedSubtitleText(
             text = text,
             color = textColor,
             textAlign = TextAlign.Center,
-            fontSize = fontSizeSp.sp,
             maxLines = MaxSubtitleLines,
+            style = baseTextStyle,
             modifier = Modifier.matchParentSize()
         )
     }
