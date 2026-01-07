@@ -16,7 +16,9 @@ class MediaCodecEngine(
     private var surface: Surface? = null
     private var running = false
 
-    override val durationMs: Long = 0
+    // 🔴 FIX: duration MUST be populated from MediaFormat
+    override var durationMs: Long = 0
+        private set
 
     override val currentPositionMs: Long
         get() = clock.positionMs
@@ -40,6 +42,15 @@ class MediaCodecEngine(
         extractor!!.selectTrack(trackIndex)
 
         val format = extractor!!.getTrackFormat(trackIndex)
+
+        // ✅ CRITICAL: duration is in microseconds
+        durationMs =
+            if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                format.getLong(MediaFormat.KEY_DURATION) / 1000
+            } else {
+                0L
+            }
+
         val mime = format.getString(MediaFormat.KEY_MIME)!!
 
         codec = MediaCodec.createDecoderByType(mime).apply {
@@ -101,7 +112,9 @@ class MediaCodecEngine(
                 codec.releaseOutputBuffer(outIndex, true)
             }
 
-            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                break
+            }
         }
     }
 
@@ -119,7 +132,7 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
-        // Implemented in D2-D+
+        // D2-D+ (future)
     }
 
     override fun release() {
@@ -129,5 +142,6 @@ class MediaCodecEngine(
         extractor?.release()
         codec = null
         extractor = null
+        durationMs = 0
     }
 }
