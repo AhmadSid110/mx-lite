@@ -175,29 +175,48 @@ fun PlayerScreen(
         // Auto-load subtitle from same folder
         val parent = file.parentFile
         if (parent != null) {
-            // Try SRT first, then ASS
-            val subtitleFiles = listOf(
-                File(parent, file.nameWithoutExtension + ".srt"),
-                File(parent, file.nameWithoutExtension + ".ass"),
-                File(parent, file.nameWithoutExtension + ".ssa")
+            val baseName = file.nameWithoutExtension
+            
+            // Search for subtitle files with various naming patterns
+            // Priority: exact match > language suffix (en, eng, etc.)
+            val subtitlePatterns = listOf(
+                // Exact matches (highest priority)
+                "$baseName.srt",
+                "$baseName.ass",
+                "$baseName.ssa",
+                // Language variants
+                "$baseName.en.srt",
+                "$baseName.eng.srt",
+                "$baseName.english.srt",
+                "$baseName.en.ass",
+                "$baseName.eng.ass",
+                "$baseName.en.ssa",
+                "$baseName.eng.ssa"
             )
             
-            for (subtitleFile in subtitleFiles) {
+            // Find all matching subtitle files
+            var firstTrackId: String? = null
+            for (pattern in subtitlePatterns) {
+                val subtitleFile = File(parent, pattern)
                 if (subtitleFile.exists()) {
                     val track = SubtitleTrack.FileTrack(subtitleFile)
                     subtitleController?.addTrack(track)
                     
-                    // Restore saved track or use default
-                    if (savedPrefs.selectedTrackId == track.id) {
-                        subtitleController?.selectTrack(track.id)
-                        selectedTrackId = track.id
-                    } else if (savedPrefs.selectedTrackId == null) {
-                        // No saved preference, use first available track
-                        subtitleController?.selectTrack(track.id)
-                        selectedTrackId = track.id
+                    // Remember first track found
+                    if (firstTrackId == null) {
+                        firstTrackId = track.id
                     }
-                    break  // Use first found subtitle file
                 }
+            }
+            
+            // Restore saved track or auto-select first available
+            if (savedPrefs.selectedTrackId != null) {
+                subtitleController?.selectTrack(savedPrefs.selectedTrackId)
+                selectedTrackId = savedPrefs.selectedTrackId
+            } else if (firstTrackId != null) {
+                // No saved preference, use first available track
+                subtitleController?.selectTrack(firstTrackId)
+                selectedTrackId = firstTrackId
             }
         }
         
