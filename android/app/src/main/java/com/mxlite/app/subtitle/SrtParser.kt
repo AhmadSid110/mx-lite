@@ -1,11 +1,21 @@
 package com.mxlite.app.subtitle
 
 import java.io.File
+import java.io.InputStream
 
 object SrtParser {
 
     fun parse(file: File): List<SubtitleCue> {
         val lines = file.readLines()
+        return parseLines(lines)
+    }
+
+    fun parse(stream: InputStream): List<SubtitleCue> {
+        val lines = stream.bufferedReader().readLines()
+        return parseLines(lines)
+    }
+
+    private fun parseLines(lines: List<String>): List<SubtitleCue> {
         val out = mutableListOf<SubtitleCue>()
         var i = 0
 
