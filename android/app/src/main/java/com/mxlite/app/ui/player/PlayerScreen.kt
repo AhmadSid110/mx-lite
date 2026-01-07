@@ -79,6 +79,7 @@ fun PlayerScreen(
     var durationMs by remember { mutableStateOf(0L) }
     var controlsVisible by remember { mutableStateOf(true) }
     var subtitleLine by remember { mutableStateOf<SubtitleCue?>(null) }
+    var playbackStarted by remember { mutableStateOf(false) }
 
     var userSeeking by remember { mutableStateOf(false) }
     var seekPositionMs by remember { mutableStateOf(0L) }
@@ -264,6 +265,7 @@ fun PlayerScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            playbackStarted = false
             engine.release()
         }
     }
@@ -308,7 +310,11 @@ fun PlayerScreen(
                             object : android.view.SurfaceHolder.Callback {
                                 override fun surfaceCreated(holder: android.view.SurfaceHolder) {
                                     engine.attachSurface(holder.surface)
-                                    engine.play(file)
+
+                                    if (!playbackStarted) {
+                                        playbackStarted = true
+                                        engine.play(file)
+                                    }
                                 }
                                 override fun surfaceChanged(
                                     holder: android.view.SurfaceHolder,
