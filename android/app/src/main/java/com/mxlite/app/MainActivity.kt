@@ -1,35 +1,39 @@
 package com.mxlite.app
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import com.mxlite.app.ui.AppRoot
 
 class MainActivity : ComponentActivity() {
 
+    private val mediaPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        requestMediaPermissions()
 
         setContent {
             AppRoot()
         }
     }
 
-    /**
-     * 🔒 CRITICAL:
-     * Disable Activity-level back handling.
-     *
-     * - Prevents Android from calling finish()
-     * - Prevents app from minimizing on back gesture
-     * - Allows Compose BackHandler to fully control navigation
-     *
-     * This is REQUIRED when using a single-activity Compose architecture.
-     */
-    @Deprecated(
-        message = "Handled by Compose BackHandler",
-        level = DeprecationLevel.HIDDEN
-    )
-    override fun onBackPressed() {
-        // NO-OP — handled in Compose
+    private fun requestMediaPermissions() {
+        val permissions =
+            if (Build.VERSION.SDK_INT >= 33) {
+                arrayOf(
+                    Manifest.permission.READ_MEDIA_VIDEO,
+                    Manifest.permission.READ_MEDIA_AUDIO
+                )
+            } else {
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+
+        mediaPermissionLauncher.launch(permissions)
     }
 }
