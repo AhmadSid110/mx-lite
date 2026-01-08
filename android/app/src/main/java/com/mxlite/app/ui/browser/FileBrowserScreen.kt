@@ -9,8 +9,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -20,42 +22,58 @@ import com.mxlite.app.storage.StorageStore
 import kotlinx.coroutines.launch
 import java.io.File
 
+/* ───────────────────────────────────────────── */
+/* Video detection helpers */
+/* ───────────────────────────────────────────── */
+
+private val VIDEO_EXTENSIONS = setOf(
+    "mp4", "mkv", "avi", "webm", "mov", "flv", "wmv", "m4v"
+)
+
+private fun File.isVideo(): Boolean =
+    isFile && extension.lowercase() in VIDEO_EXTENSIONS
+
+private fun File.containsVideoRecursively(): Boolean {
+    if (!isDirectory) return false
+    listFiles()?.forEach {
+        if (it.isVideo()) return true
+        if (it.isDirectory && it.containsVideoRecursively()) return true
+    }
+    return false
+}
+
+/* ───────────────────────────────────────────── */
+/* UI */
+/* ───────────────────────────────────────────── */
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
     onFileSelected: (File) -> Unit
 ) {
-    // ───────── State (MUST be before BackHandler logic uses it) ─────────
-    var currentDir by remember { mutableStateOf(File("/storage/emulated/0")) }
-    var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
-
-    // ───────── BACK HANDLER (CRITICAL FIX) ─────────
-    BackHandler(
-        enabled = currentSafDir != null || currentDir.parentFile != null
-    ) {
-        when {
-            currentSafDir != null -> {
-                currentSafDir = null
-            }
-            currentDir.parentFile != null -> {
-                currentDir = currentDir.parentFile!!
-            }
-        }
-    }
-
-    // ───────── Context / helpers ─────────
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
 
-    // ───────── SAF folders root ─────────
+    val rootDir = remember { File("/storage/emulated/0") }
+    var currentDir by remember { mutableStateOf(rootDir) }
+
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
+
+    /* ───────── Back handling ───────── */
+    BackHandler(enabled = currentDir != rootDir || currentSafDir != null) {
+        when {
+            currentSafDir != null -> currentSafDir = null
+            currentDir != rootDir -> currentDir = currentDir.parentFile ?: rootDir
+        }
+    }
 
     LaunchedEffect(Unit) {
         safFolders = store.getFolders()
     }
 
-    // ───────── Folder Picker (SAF) ─────────
+    /* ───────── SAF picker ───────── */
     val folderPicker =
         rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree()
@@ -72,131 +90,146 @@ fun FileBrowserScreen(
             }
         }
 
-    Column(
-        modifier = Modifier.fillMaxSize()
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
 
-        // ───────── Top Bar ─────────
+        /* ───────── Top bar ───────── */
         TopAppBar(
             title = {
                 Text(
                     when {
-                        currentSafDir != null -> "SAF Browser"
-                        else -> "File Browser"
+                        currentSafDir != null -> "Folders"
+                        currentDir != rootDir -> currentDir.name
+                        else -> "Videos"
                     }
                 )
             },
             navigationIcon = {
-                if (currentSafDir != null || currentDir.parentFile != null) {
-                    IconButton(
-                        onClick = {
-                            when {
-                                currentSafDir != null -> currentSafDir = null
-                                currentDir.parentFile != null ->
-                                    currentDir = currentDir.parentFile!!
-                            }
+                if (currentDir != rootDir || currentSafDir != null) {
+                    IconButton(onClick = {
+                        when {
+                            currentSafDir != null -> currentSafDir = null
+                            currentDir != rootDir -> currentDir = currentDir.parentFile ?: rootDir
                         }
-                    ) {
+                    }) {
                         Text("←")
                     }
                 }
             },
             actions = {
                 TextButton(onClick = { folderPicker.launch(null) }) {
-                    Text("Pick Folder")
+                    Text("Add Folder")
                 }
             }
         )
 
-        // ───────── SAF ROOT LIST ─────────
+        /* ───────── SAF root folders ───────── */
         if (currentSafDir == null && safFolders.isNotEmpty()) {
             LazyColumn {
                 items(safFolders) { uri ->
-                    Text(
-                        text = "📁 ${uri.lastPathSegment ?: uri}",
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                currentSafDir =
-                                    DocumentFile.fromTreeUri(context, uri)
-                            }
                             .padding(12.dp)
-                    )
+                            .clickable {
+                                currentSafDir = DocumentFile.fromTreeUri(context, uri)
+                            },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("📁", style = MaterialTheme.typography.headlineSmall)
+                            Spacer(Modifier.width(12.dp))
+                            Text(uri.lastPathSegment ?: "Folder")
+                        }
+                    }
                 }
             }
             Divider()
         }
 
-        // ───────── SAF DIRECTORY VIEW ─────────
+        /* ───────── SAF browsing ───────── */
         if (currentSafDir != null) {
             val children = remember(currentSafDir) {
-                currentSafDir!!
-                    .listFiles()
-                    .sortedWith(
-                        compareBy<DocumentFile> { !it.isDirectory }
-                            .thenBy { it.name?.lowercase() }
-                    )
+                currentSafDir!!.listFiles()
+                    .sortedWith(compareBy<DocumentFile> { !it.isDirectory })
             }
 
             LazyColumn {
                 items(children) { doc ->
-                    Text(
-                        text = if (doc.isDirectory)
-                            "📁 ${doc.name}"
-                        else
-                            doc.name ?: "",
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                             .clickable {
                                 if (doc.isDirectory) {
                                     currentSafDir = doc
                                 } else {
-                                    val file =
-                                        SafFileCopier.copyToCache(
-                                            context,
-                                            doc.uri
-                                        )
+                                    val file = SafFileCopier.copyToCache(context, doc.uri)
                                     onFileSelected(file)
                                 }
-                            }
-                            .padding(12.dp)
-                    )
+                            },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (doc.isDirectory) "📁" else "▶",
+                                style = MaterialTheme.typography.headlineSmall
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(doc.name ?: "")
+                        }
+                    }
                 }
             }
             return@Column
         }
 
-        // ───────── NORMAL FILESYSTEM ─────────
-        val files = remember(currentDir) {
+        /* ───────── Local filesystem browsing ───────── */
+        val entries = remember(currentDir) {
             currentDir.listFiles()
-                ?.sortedBy { !it.isDirectory }
+                ?.filter {
+                    it.isVideo() || (it.isDirectory && it.containsVideoRecursively())
+                }
+                ?.sortedWith(compareBy<File> { !it.isDirectory })
                 ?: emptyList()
         }
 
-        Text(
-            text = currentDir.absolutePath,
-            modifier = Modifier.padding(8.dp),
-            style = MaterialTheme.typography.labelMedium
-        )
-
         LazyColumn {
-            items(files) { file ->
-                Text(
-                    text = if (file.isDirectory)
-                        "📁 ${file.name}"
-                    else
-                        file.name,
+            items(entries) { file ->
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                         .clickable {
                             if (file.isDirectory) {
                                 currentDir = file
                             } else {
                                 onFileSelected(file)
                             }
-                        }
-                        .padding(12.dp)
-                )
+                        },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            if (file.isDirectory) "📁" else "▶",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            file.name,
+                            maxLines = 1,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
             }
         }
     }
