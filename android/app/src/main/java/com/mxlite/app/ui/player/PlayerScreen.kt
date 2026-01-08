@@ -69,8 +69,7 @@ fun PlayerScreen(
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    BackHandler(enabled = true) {
-        engine.release()
+    BackHandler {
         onBack()
     }
     
@@ -971,4 +970,3 @@ fun UnsupportedCodecWarningDialog(
         }
     )
 }
-
