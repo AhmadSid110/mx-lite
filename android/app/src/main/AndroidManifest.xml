@@ -16,7 +16,8 @@
     <application
         android:allowBackup="false"
         android:label="MX Lite"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+        android:enableOnBackInvokedCallback="true">
 
         <activity
             android:name=".MainActivity"
