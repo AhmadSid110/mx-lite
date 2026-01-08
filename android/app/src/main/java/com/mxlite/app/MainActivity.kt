@@ -15,8 +15,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Prevent system back from finishing the activity; Compose handles navigation.
+    /**
+     * 🔒 CRITICAL:
+     * Disable Activity-level back handling.
+     *
+     * - Prevents Android from calling finish()
+     * - Prevents app from minimizing on back gesture
+     * - Allows Compose BackHandler to fully control navigation
+     *
+     * This is REQUIRED when using a single-activity Compose architecture.
+     */
+    @Deprecated(
+        message = "Handled by Compose BackHandler",
+        level = DeprecationLevel.HIDDEN
+    )
     override fun onBackPressed() {
-        // Intentionally empty.
+        // NO-OP — handled in Compose
     }
 }
