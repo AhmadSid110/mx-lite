@@ -33,7 +33,8 @@ class PlayerController : PlayerEngine {
     }
 
     override fun seekTo(positionMs: Long) {
-        // D2-D+ (future)
+        audio.seekTo(positionMs)
+        video.seekTo(positionMs)
     }
 
     override fun release() {

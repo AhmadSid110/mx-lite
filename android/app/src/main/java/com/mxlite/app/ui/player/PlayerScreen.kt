@@ -2,6 +2,7 @@ package com.mxlite.app.ui.player
 
 import android.net.Uri
 import android.view.SurfaceView
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -68,6 +69,11 @@ fun PlayerScreen(
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
+    BackHandler(enabled = true) {
+        engine.release()
+        onBack()
+    }
+    
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
