@@ -70,7 +70,9 @@ fun PlayerScreen(
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    BackHandler(enabled = true) { onBack() }
+    BackHandler(enabled = true) {
+        onBack()
+    }
     
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -294,7 +296,7 @@ fun PlayerScreen(
         ) {
             AndroidView(
                 modifier = Modifier
-                    .matchParentSize()
+                    .fillMaxSize()
                     .focusable(false)
                     .pointerInput(Unit) {
                         detectTapGestures(
@@ -311,6 +313,8 @@ fun PlayerScreen(
                     },
                 factory = { ctx ->
                     SurfaceView(ctx).apply {
+                        isFocusable = false
+                        isFocusableInTouchMode = false
                         holder.addCallback(
                             object : android.view.SurfaceHolder.Callback {
                                 override fun surfaceCreated(holder: android.view.SurfaceHolder) {
