@@ -16,7 +16,6 @@ class MediaCodecEngine(
     private var surface: Surface? = null
     private var running = false
 
-    // 🔴 FIX: duration MUST be populated from MediaFormat
     override var durationMs: Long = 0
         private set
 
@@ -43,7 +42,7 @@ class MediaCodecEngine(
 
         val format = extractor!!.getTrackFormat(trackIndex)
 
-        // ✅ CRITICAL: duration is in microseconds
+        // Duration is in microseconds
         durationMs =
             if (format.containsKey(MediaFormat.KEY_DURATION)) {
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
@@ -97,9 +96,10 @@ class MediaCodecEngine(
 
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
             if (outIndex >= 0) {
+
                 val videoPtsMs = info.presentationTimeUs / 1000
-                val audioMs = clock.positionMs
-                val delta = videoPtsMs - audioMs
+                val clockMs = resolveClockMs(info)
+                val delta = videoPtsMs - clockMs
 
                 when {
                     delta > 30 -> Thread.sleep(delta)
@@ -115,6 +115,19 @@ class MediaCodecEngine(
             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                 break
             }
+        }
+    }
+
+    /**
+     * Audio-first clock.
+     * If audio is not active, fall back to video PTS.
+     */
+    private fun resolveClockMs(info: MediaCodec.BufferInfo): Long {
+        val audioMs = clock.positionMs
+        return if (audioMs > 0) {
+            audioMs
+        } else {
+            info.presentationTimeUs / 1000
         }
     }
 
