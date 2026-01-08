@@ -238,7 +238,7 @@ fun FileBrowserScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Folder,
-                                contentDescription = null
+                                contentDescription = "Folder"
                             )
                             Spacer(Modifier.width(12.dp))
                             Text(
@@ -257,12 +257,14 @@ fun FileBrowserScreen(
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PlayArrow,
-                                contentDescription = null
+                                contentDescription = "Video file"
                             )
                             Spacer(Modifier.width(12.dp))
                             Text(
