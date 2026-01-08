@@ -3,11 +3,9 @@
     xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.mxlite.app">
 
-    <!-- ───────────────────────────────────────────── -->
-    <!-- 🔐 MEDIA READ PERMISSIONS -->
-    <!-- ───────────────────────────────────────────── -->
+    <!-- ───────── Media permissions ───────── -->
 
-    <!-- Android 13+ (API 33+) -->
+    <!-- Android 13+ -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
@@ -16,22 +14,14 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!-- ───────────────────────────────────────────── -->
-    <!-- APPLICATION -->
-    <!-- ───────────────────────────────────────────── -->
     <application
         android:allowBackup="false"
         android:label="MX Lite"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
-
-        <!-- ✅ REQUIRED for Android 13+ predictive back -->
-        android:enableOnBackInvokedCallback="true">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-
-            <!-- 🔒 Prevent activity recreation / glitches -->
             android:launchMode="singleTask"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize">
 
