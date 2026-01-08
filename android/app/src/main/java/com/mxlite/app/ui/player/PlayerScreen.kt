@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -69,9 +70,7 @@ fun PlayerScreen(
     engine: PlayerEngine,
     onBack: () -> Unit
 ) {
-    BackHandler {
-        onBack()
-    }
+    BackHandler(enabled = true) { onBack() }
     
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -275,7 +274,7 @@ fun PlayerScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().focusable()) {
 
         if (controlsVisible) {
             TopAppBar(
@@ -296,6 +295,7 @@ fun PlayerScreen(
             AndroidView(
                 modifier = Modifier
                     .matchParentSize()
+                    .focusable(false)
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = { controlsVisible = !controlsVisible },
