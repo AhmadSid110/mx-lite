@@ -58,7 +58,8 @@ fun FileBrowserScreen(
     onFileSelected: (File) -> Unit
 ) {
     // ───────── State (MUST be before BackHandler logic uses it) ─────────
-    var currentDir by remember { mutableStateOf(File("/storage/emulated/0")) }
+    val initialDir = remember { File("/storage/emulated/0") }
+    var currentDir by remember { mutableStateOf(initialDir) }
     var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
 
     // ───────── BACK HANDLER (CRITICAL FIX) ─────────
@@ -209,7 +210,7 @@ fun FileBrowserScreen(
                 ?: emptyList()
         }
 
-        val isRootLevel = currentDir.absolutePath == "/storage/emulated/0"
+        val isRootLevel = currentDir.absolutePath == initialDir.absolutePath
         val itemsToShow = if (isRootLevel) visibleFolders else folderContents
 
         Text(
