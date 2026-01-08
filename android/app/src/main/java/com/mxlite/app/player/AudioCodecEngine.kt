@@ -13,6 +13,7 @@ class AudioCodecEngine : PlaybackClock {
     private var audioTrack: AudioTrack? = null
 
     private var playing = false
+    @Volatile
     private var playedSamples = 0L
     private var sampleRate = 44100
 
@@ -128,6 +129,14 @@ class AudioCodecEngine : PlaybackClock {
 
     fun pause() {
         playing = false
+    }
+
+    fun seekTo(positionMs: Long) {
+        extractor?.seekTo(
+            positionMs * 1000,
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
+        playedSamples = (positionMs * sampleRate) / 1000
     }
 
     fun reset() {
