@@ -2,6 +2,7 @@ package com.mxlite.app.ui.browser
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -24,22 +25,37 @@ import java.io.File
 fun FileBrowserScreen(
     onFileSelected: (File) -> Unit
 ) {
+    // ───────── State (MUST be before BackHandler logic uses it) ─────────
+    var currentDir by remember { mutableStateOf(File("/storage/emulated/0")) }
+    var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
+
+    // ───────── BACK HANDLER (CRITICAL FIX) ─────────
+    BackHandler(
+        enabled = currentSafDir != null || currentDir.parentFile != null
+    ) {
+        when {
+            currentSafDir != null -> {
+                currentSafDir = null
+            }
+            currentDir.parentFile != null -> {
+                currentDir = currentDir.parentFile!!
+            }
+        }
+    }
+
+    // ───────── Context / helpers ─────────
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
 
-    // ───────── Normal FS ─────────
-    var currentDir by remember { mutableStateOf(File("/storage/emulated/0")) }
-
-    // ───────── SAF ─────────
+    // ───────── SAF folders root ─────────
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
 
     LaunchedEffect(Unit) {
         safFolders = store.getFolders()
     }
 
-    // ───────── Folder Picker ─────────
+    // ───────── Folder Picker (SAF) ─────────
     val folderPicker =
         rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree()
@@ -56,19 +72,31 @@ fun FileBrowserScreen(
             }
         }
 
-    Column {
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
 
         // ───────── Top Bar ─────────
         TopAppBar(
             title = {
                 Text(
-                    if (currentSafDir != null) "SAF Browser"
-                    else "File Browser"
+                    when {
+                        currentSafDir != null -> "SAF Browser"
+                        else -> "File Browser"
+                    }
                 )
             },
             navigationIcon = {
-                if (currentSafDir != null) {
-                    IconButton(onClick = { currentSafDir = null }) {
+                if (currentSafDir != null || currentDir.parentFile != null) {
+                    IconButton(
+                        onClick = {
+                            when {
+                                currentSafDir != null -> currentSafDir = null
+                                currentDir.parentFile != null ->
+                                    currentDir = currentDir.parentFile!!
+                            }
+                        }
+                    ) {
                         Text("←")
                     }
                 }
@@ -113,7 +141,10 @@ fun FileBrowserScreen(
             LazyColumn {
                 items(children) { doc ->
                     Text(
-                        text = if (doc.isDirectory) "📁 ${doc.name}" else doc.name ?: "",
+                        text = if (doc.isDirectory)
+                            "📁 ${doc.name}"
+                        else
+                            doc.name ?: "",
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -151,7 +182,10 @@ fun FileBrowserScreen(
         LazyColumn {
             items(files) { file ->
                 Text(
-                    text = if (file.isDirectory) "📁 ${file.name}" else file.name,
+                    text = if (file.isDirectory)
+                        "📁 ${file.name}"
+                    else
+                        file.name,
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
