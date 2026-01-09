@@ -7,6 +7,7 @@
 
 #include <thread>
 #include <atomic>
+#include <vector>
 #include <cstdint>
 
 #include "Clock.h"
@@ -22,10 +23,10 @@ public:
     void seekUs(int64_t us);
 
 private:
-    // Core
+    // Decode thread
     void decodeLoop();
 
-    // OpenSL
+    // OpenSL ES
     bool setupOpenSL();
     void cleanupOpenSL();
     void cleanupCodec();
@@ -36,15 +37,15 @@ private:
     );
 
 private:
-    // Clock (MASTER)
+    /* ───────── MASTER CLOCK ───────── */
     Clock* clock_;
 
-    // Media
+    /* ───────── MediaCodec / Extractor ───────── */
     AMediaExtractor* extractor_ = nullptr;
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
 
-    // OpenSL ES
+    /* ───────── OpenSL ES ───────── */
     SLObjectItf engineObj_ = nullptr;
     SLEngineItf engine_ = nullptr;
     SLObjectItf outputMix_ = nullptr;
@@ -52,12 +53,18 @@ private:
     SLPlayItf player_ = nullptr;
     SLAndroidSimpleBufferQueueItf bufferQueue_ = nullptr;
 
-    // State
+    /* ───────── Threading / State ───────── */
     std::atomic<bool> running_{false};
     std::thread decodeThread_;
+
+    /* ───────── PCM Buffer Pool (CRITICAL) ───────── */
+    static constexpr int kNumBuffers = 4;
+    static constexpr int kBufferSize = 8192;
+
+    std::vector<std::vector<uint8_t>> pcmBuffers_;
     std::atomic<int> buffersAvailable_{0};
 
-    // Audio format
+    /* ───────── Audio Format ───────── */
     int sampleRate_ = 44100;
     int channelCount_ = 2;
 };
