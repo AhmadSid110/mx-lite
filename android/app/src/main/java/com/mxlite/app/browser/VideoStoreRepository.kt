@@ -5,6 +5,8 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 
+const val DEFAULT_FOLDER_NAME = "Videos"
+
 data class VideoItem(
     val contentUri: Uri,
     val name: String,
@@ -36,7 +38,7 @@ object VideoStoreRepository {
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
                 val name = cursor.getString(nameCol)
-                val folder = cursor.getString(pathCol)?.trimEnd('/') ?: "Videos"
+                val folder = cursor.getString(pathCol)?.trimEnd('/') ?: DEFAULT_FOLDER_NAME
 
                 items.add(
                     VideoItem(

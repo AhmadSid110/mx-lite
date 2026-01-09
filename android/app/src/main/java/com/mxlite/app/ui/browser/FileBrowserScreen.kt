@@ -18,11 +18,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
+import com.mxlite.app.browser.DEFAULT_FOLDER_NAME
 import com.mxlite.app.browser.VideoItem
 import com.mxlite.app.browser.VideoStoreRepository
 import com.mxlite.app.storage.SafFileCopier
 import com.mxlite.app.storage.StorageStore
 import java.io.File
+
+/* ───────────────────────────────────────────── */
+/* Helpers */
+/* ───────────────────────────────────────────── */
+
+private fun extractFolderDisplayName(folder: String): String =
+    folder.split('/').lastOrNull() ?: folder
 
 /* ───────────────────────────────────────────── */
 /* UI */
@@ -84,8 +92,8 @@ fun FileBrowserScreen(
                 Text(
                     when {
                         currentSafDir != null -> "Folders"
-                        currentFolder != null -> currentFolder!!.split('/').lastOrNull() ?: "Videos"
-                        else -> "Videos"
+                        currentFolder != null -> extractFolderDisplayName(currentFolder!!)
+                        else -> DEFAULT_FOLDER_NAME
                     }
                 )
             },
@@ -168,7 +176,7 @@ fun FileBrowserScreen(
             
             LazyColumn {
                 items(folders) { folder ->
-                    val displayName = folder.split('/').lastOrNull() ?: folder
+                    val displayName = extractFolderDisplayName(folder)
                     FolderCard(displayName) {
                         currentFolder = folder
                     }
