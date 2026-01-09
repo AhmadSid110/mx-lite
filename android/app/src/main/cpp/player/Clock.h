@@ -2,15 +2,14 @@
 #include <atomic>
 #include <cstdint>
 
+/**
+ * Master clock driven ONLY by audio render progress.
+ * Time unit: microseconds (µs)
+ */
 class Clock {
 public:
-    // Reset / seek
     void setUs(int64_t us);
-
-    // Advance clock by rendered audio duration
     void addUs(int64_t deltaUs);
-
-    // Read current master time
     int64_t getUs() const;
 
 private:
