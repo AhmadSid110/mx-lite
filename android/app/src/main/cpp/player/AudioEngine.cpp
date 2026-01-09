@@ -45,7 +45,7 @@ bool AudioEngine::open(const char* path) {
         return false;
 
     int audioTrack = -1;
-    size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
+    const size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
 
     for (size_t i = 0; i < trackCount; i++) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
@@ -110,7 +110,6 @@ bool AudioEngine::setupAAudio() {
     }
 
     AAudioStream_requestStart(stream_);
-    LOGD("AAudio started: %d Hz, %d ch", sampleRate_, channelCount_);
     return true;
 }
 
@@ -193,59 +192,60 @@ void AudioEngine::decodeLoop() {
         ssize_t outIndex =
                 AMediaCodec_dequeueOutputBuffer(codec_, &info, 10'000);
 
-        if (outIndex >= 0 && info.size > 0) {
+        if (outIndex < 0 || info.size <= 0)
+            continue;
 
-            uint8_t* raw =
-                    AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
+        uint8_t* raw =
+                AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
 
-            bool isFloat =
-                    (info.size % (sizeof(float) * channelCount_)) == 0;
+        /*
+         * FINAL, SAFE FORMAT HANDLING
+         * - AAC decoders output either:
+         *   PCM_16  → frames = size / (2 * channels)
+         *   PCM_FLOAT → frames = size / (4 * channels)
+         * - We DO NOT use MediaFormat keys (API 28 issue)
+         */
 
-            int frames = 0;
-            aaudio_result_t written = 0;
+        int frames = 0;
 
-            if (isFloat) {
-                float* f =
-                        reinterpret_cast<float*>(raw + info.offset);
-                int samples = info.size / sizeof(float);
-                pcm16.resize(samples);
+        if (info.size % (sizeof(float) * channelCount_) == 0) {
+            /* PCM_FLOAT */
+            float* f = reinterpret_cast<float*>(raw + info.offset);
+            int samples = info.size / sizeof(float);
 
-                for (int i = 0; i < samples; i++)
-                    pcm16[i] = floatToPcm16(f[i]);
+            pcm16.resize(samples);
+            for (int i = 0; i < samples; i++)
+                pcm16[i] = floatToPcm16(f[i]);
 
-                frames = samples / channelCount_;
+            frames = samples / channelCount_;
 
-                written = AAudioStream_write(
-                        stream_,
-                        pcm16.data(),
-                        frames,
-                        1'000'000
-                );
-            } else {
-                int16_t* pcm =
-                        reinterpret_cast<int16_t*>(raw + info.offset);
+            AAudioStream_write(
+                    stream_,
+                    pcm16.data(),
+                    frames,
+                    -1 /* block */
+            );
+        } else {
+            /* PCM_16 */
+            int16_t* pcm =
+                    reinterpret_cast<int16_t*>(raw + info.offset);
 
-                frames = info.size / (2 * channelCount_);
+            frames = info.size / (2 * channelCount_);
 
-                written = AAudioStream_write(
-                        stream_,
-                        pcm,
-                        frames,
-                        1'000'000
-                );
-            }
-
-            if (written > 0) {
-                int64_t deltaUs =
-                        (int64_t) written * 1'000'000LL / sampleRate_;
-                clock_->addUs(deltaUs);
-            }
-
-            LOGD("Audio write: requested=%d written=%d",
-                 frames, (int)written);
-
-            AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
+            AAudioStream_write(
+                    stream_,
+                    pcm,
+                    frames,
+                    -1 /* block */
+            );
         }
+
+        /* 🔑 MASTER CLOCK — ONLY AFTER AUDIO IS WRITTEN */
+        const int64_t deltaUs =
+                (int64_t)frames * 1'000'000LL / sampleRate_;
+        clock_->addUs(deltaUs);
+
+        AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
     }
 }
 
