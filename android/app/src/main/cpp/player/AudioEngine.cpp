@@ -160,6 +160,9 @@ void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
     std::vector<int16_t> pcm16;
 
+    bool isFloat = false;
+    bool formatKnown = false;
+
     while (running_) {
 
         /* ---------- INPUT ---------- */
@@ -191,14 +194,25 @@ void AudioEngine::decodeLoop() {
 
         if (out >= 0 && info.size > 0) {
 
+            /* 🔑 FINAL FIX: authoritative PCM format detection */
+            if (!formatKnown) {
+                AMediaFormat* outFmt =
+                        AMediaCodec_getOutputFormat(codec_);
+                int32_t encoding = 0;
+                if (outFmt &&
+                    AMediaFormat_getInt32(
+                            outFmt,
+                            AMEDIAFORMAT_KEY_PCM_ENCODING,
+                            &encoding)) {
+                    isFloat = (encoding == 4); // PCM_FLOAT
+                }
+                formatKnown = true;
+            }
+
             uint8_t* raw =
                     AMediaCodec_getOutputBuffer(codec_, out, nullptr);
 
-            /* 🔑 FINAL FIX: detect PCM format */
-            bool isFloat =
-                    info.size % (sizeof(float) * channelCount_) == 0;
-
-            int frames;
+            int frames = 0;
 
             if (isFloat) {
                 /* PCM_FLOAT → PCM_16 */
@@ -236,7 +250,7 @@ void AudioEngine::decodeLoop() {
 
             /* 🔑 MASTER CLOCK ADVANCE (AFTER AUDIO RENDER) */
             int64_t deltaUs =
-                    (int64_t) frames * 1'000'000LL / sampleRate_;
+                    (int64_t)frames * 1'000'000LL / sampleRate_;
             clock_->addUs(deltaUs);
 
             AMediaCodec_releaseOutputBuffer(codec_, out, false);
