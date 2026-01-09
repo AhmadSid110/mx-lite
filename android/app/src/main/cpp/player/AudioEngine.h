@@ -6,7 +6,9 @@
 #include <SLES/OpenSLES_Android.h>
 #include <thread>
 #include <atomic>
+#include <vector>
 #include <cstdint>
+
 #include "Clock.h"
 
 class AudioEngine {
@@ -26,7 +28,7 @@ private:
     void cleanupCodec();
 
     static void bufferQueueCallback(
-        SLAndroidSimpleBufferQueueItf bq, void* ctx
+        SLAndroidSimpleBufferQueueItf, void* ctx
     );
 
     Clock* clock_;
@@ -34,9 +36,6 @@ private:
     AMediaExtractor* extractor_ = nullptr;
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
-
-    int sampleRate_ = 44100;
-    int channelCount_ = 2;
 
     SLObjectItf engineObj_ = nullptr;
     SLEngineItf engine_ = nullptr;
@@ -48,5 +47,8 @@ private:
     std::atomic<bool> running_{false};
     std::thread decodeThread_;
 
-    std::atomic<int> buffersAvailable_{0};
+    std::atomic<int> buffersAvailable_{2};
+
+    int sampleRate_ = 44100;
+    int channelCount_ = 2;
 };
