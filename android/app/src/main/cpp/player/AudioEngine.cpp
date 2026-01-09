@@ -1,3 +1,4 @@
+#include <aaudio/AAudio.h>
 #include "AudioEngine.h"
 #include <android/log.h>
 #include <cstring>
