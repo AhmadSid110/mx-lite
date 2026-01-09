@@ -1,17 +1,13 @@
-package com.mxlite.app
-
-import android.Manifest
-import android.os.Build
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import com.mxlite.app.ui.AppRoot
-
 class MainActivity : ComponentActivity() {
 
     private val mediaPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+        registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { result ->
+            permissionGranted = result.values.any { it }
+        }
+
+    private var permissionGranted by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -19,7 +15,11 @@ class MainActivity : ComponentActivity() {
         requestMediaPermissions()
 
         setContent {
-            AppRoot()
+            if (permissionGranted) {
+                AppRoot()
+            } else {
+                PermissionWaitingScreen()
+            }
         }
     }
 
