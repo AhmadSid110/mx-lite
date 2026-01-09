@@ -3,11 +3,21 @@
 #include <aaudio/AAudio.h>
 #include <android/log.h>
 #include <cstring>
-#include <unistd.h>
+#include <vector>
+#include <cmath>
 
 #define LOG_TAG "AudioEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+/* ───────────────────────────────────────────── */
+/* PCM helpers */
+/* ───────────────────────────────────────────── */
+
+static inline int16_t floatToPcm16(float v) {
+    v = fmaxf(-1.0f, fminf(1.0f, v));
+    return static_cast<int16_t>(v * 32767.0f);
+}
 
 /* ───────────────────────────────────────────── */
 /* Lifecycle */
@@ -43,7 +53,7 @@ bool AudioEngine::open(const char* path) {
 
         if (mime && strncmp(mime, "audio/", 6) == 0) {
             format_ = fmt;
-            audioTrack = (int)i;
+            audioTrack = static_cast<int>(i);
             break;
         }
         AMediaFormat_delete(fmt);
@@ -84,7 +94,6 @@ bool AudioEngine::setupAAudio() {
             builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setSharingMode(
             builder, AAUDIO_SHARING_MODE_SHARED);
-
     AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
     AAudioStreamBuilder_setChannelCount(builder, channelCount_);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
@@ -133,7 +142,8 @@ void AudioEngine::seekUs(int64_t us) {
     AMediaExtractor_seekTo(
             extractor_,
             us,
-            AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
+            AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC
+    );
 
     AMediaCodec_flush(codec_);
     clock_->setUs(us);
@@ -143,16 +153,17 @@ void AudioEngine::seekUs(int64_t us) {
 }
 
 /* ───────────────────────────────────────────── */
-/* Decode loop */
+/* Decode loop (MASTER CLOCK SOURCE) */
 /* ───────────────────────────────────────────── */
 
 void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
+    std::vector<int16_t> pcm16;
 
     while (running_) {
 
-        // ---------- INPUT ----------
-        ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 10000);
+        /* ---------- INPUT ---------- */
+        ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 10'000);
         if (in >= 0) {
             size_t cap;
             uint8_t* buf =
@@ -163,42 +174,73 @@ void AudioEngine::decodeLoop() {
             if (sz < 0) {
                 AMediaCodec_queueInputBuffer(
                         codec_, in, 0, 0, 0,
-                        AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
+                        AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
+                );
             } else {
-                int64_t pts = AMediaExtractor_getSampleTime(extractor_);
+                int64_t pts =
+                        AMediaExtractor_getSampleTime(extractor_);
                 AMediaCodec_queueInputBuffer(
                         codec_, in, 0, sz, pts, 0);
                 AMediaExtractor_advance(extractor_);
             }
         }
 
-        // ---------- OUTPUT ----------
+        /* ---------- OUTPUT ---------- */
         ssize_t out =
-                AMediaCodec_dequeueOutputBuffer(codec_, &info, 10000);
-        if (out < 0 || info.size <= 0)
-            continue;
+                AMediaCodec_dequeueOutputBuffer(codec_, &info, 10'000);
 
-        uint8_t* pcm =
-                AMediaCodec_getOutputBuffer(codec_, out, nullptr);
+        if (out >= 0 && info.size > 0) {
 
-        int32_t frames =
-                info.size / (2 * channelCount_);
+            uint8_t* raw =
+                    AMediaCodec_getOutputBuffer(codec_, out, nullptr);
 
-        // 🔑 WRITE AUDIO (BLOCKING, SAFE)
-        int32_t written = AAudioStream_write(
-                stream_,
-                pcm + info.offset,
-                frames,
-                1'000'000); // 1s timeout
+            /* 🔑 FINAL FIX: detect PCM format */
+            bool isFloat =
+                    info.size % (sizeof(float) * channelCount_) == 0;
 
-        // 🔑 ADVANCE CLOCK ONLY FOR RENDERED FRAMES
-        if (written > 0) {
+            int frames;
+
+            if (isFloat) {
+                /* PCM_FLOAT → PCM_16 */
+                float* f =
+                        reinterpret_cast<float*>(raw + info.offset);
+                int samples = info.size / sizeof(float);
+                pcm16.resize(samples);
+
+                for (int i = 0; i < samples; i++)
+                    pcm16[i] = floatToPcm16(f[i]);
+
+                frames = samples / channelCount_;
+
+                AAudioStream_write(
+                        stream_,
+                        pcm16.data(),
+                        frames,
+                        -1 /* block */
+                );
+
+            } else {
+                /* PCM_16 direct */
+                int16_t* pcm =
+                        reinterpret_cast<int16_t*>(raw + info.offset);
+
+                frames = info.size / (2 * channelCount_);
+
+                AAudioStream_write(
+                        stream_,
+                        pcm,
+                        frames,
+                        -1 /* block */
+                );
+            }
+
+            /* 🔑 MASTER CLOCK ADVANCE (AFTER AUDIO RENDER) */
             int64_t deltaUs =
-                    (int64_t) written * 1000000LL / sampleRate_;
+                    (int64_t) frames * 1'000'000LL / sampleRate_;
             clock_->addUs(deltaUs);
-        }
 
-        AMediaCodec_releaseOutputBuffer(codec_, out, false);
+            AMediaCodec_releaseOutputBuffer(codec_, out, false);
+        }
     }
 }
 
