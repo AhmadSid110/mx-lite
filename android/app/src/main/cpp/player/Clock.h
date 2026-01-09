@@ -4,7 +4,13 @@
 
 class Clock {
 public:
+    // Reset / seek
     void setUs(int64_t us);
+
+    // Advance clock by rendered audio duration
+    void addUs(int64_t deltaUs);
+
+    // Read current master time
     int64_t getUs() const;
 
 private:
