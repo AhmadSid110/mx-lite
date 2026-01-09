@@ -5,6 +5,7 @@
 #include <cstring>
 #include <vector>
 #include <cmath>
+#include <unistd.h>
 
 #define LOG_TAG "AudioEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -63,7 +64,6 @@ bool AudioEngine::open(const char* path) {
     if (audioTrack < 0) return false;
 
     AMediaExtractor_selectTrack(extractor_, audioTrack);
-
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sampleRate_);
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &channelCount_);
 
@@ -108,14 +108,27 @@ bool AudioEngine::setupAAudio() {
 
     AAudioStream_requestStart(stream_);
 
-    /* 🔑 WAIT UNTIL STREAM IS ACTUALLY STARTED (Xiaomi FIX) */
-    AAudioStreamState state;
-    do {
-        state = AAudioStream_getState(stream_);
-    } while (state != AAUDIO_STREAM_STATE_STARTED);
+    /* 🔑 MIUI / XIAOMI SAFE START WAIT */
+    aaudio_stream_state_t state = AAUDIO_STREAM_STATE_UNINITIALIZED;
+    int retries = 0;
 
-    LOGD("AAudio stream started");
-    return true;
+    while (retries < 200) { // ~2 seconds max
+        state = AAudioStream_getState(stream_);
+        if (state == AAUDIO_STREAM_STATE_STARTED) {
+            LOGD("AAudio stream STARTED");
+            return true;
+        }
+        if (state == AAUDIO_STREAM_STATE_DISCONNECTED ||
+            state == AAUDIO_STREAM_STATE_STOPPED) {
+            LOGE("AAudio failed to start, state=%d", state);
+            return false;
+        }
+        usleep(10'000); // 10 ms
+        retries++;
+    }
+
+    LOGE("AAudio start timeout");
+    return false;
 }
 
 /* ───────────────────────────────────────────── */
@@ -195,26 +208,23 @@ void AudioEngine::decodeLoop() {
         int samples = info.size / (isFloat ? sizeof(float) : sizeof(int16_t));
         int frames = samples / channelCount_;
 
-        aaudio_result_t writeResult;
+        aaudio_result_t wr;
 
         if (isFloat) {
             float* f = reinterpret_cast<float*>(raw + info.offset);
             pcm16.resize(samples);
             for (int i = 0; i < samples; i++)
                 pcm16[i] = floatToPcm16(f[i]);
-
-            writeResult = AAudioStream_write(stream_, pcm16.data(), frames, -1);
+            wr = AAudioStream_write(stream_, pcm16.data(), frames, -1);
         } else {
             int16_t* pcm = reinterpret_cast<int16_t*>(raw + info.offset);
-            writeResult = AAudioStream_write(stream_, pcm, frames, -1);
+            wr = AAudioStream_write(stream_, pcm, frames, -1);
         }
 
-        if (writeResult > 0) {
+        if (wr > 0) {
             int64_t deltaUs =
                     (int64_t)frames * 1'000'000LL / sampleRate_;
             clock_->addUs(deltaUs);
-        } else {
-            LOGE("AAudio write failed: %d", writeResult);
         }
 
         AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
