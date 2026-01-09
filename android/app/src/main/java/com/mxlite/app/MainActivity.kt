@@ -12,34 +12,30 @@ import com.mxlite.app.ui.PermissionWaitingScreen
 
 class MainActivity : ComponentActivity() {
 
-    // 🔴 MUST be Compose state
     private var permissionGranted by mutableStateOf(false)
 
-    private val mediaPermissionLauncher =
+    private val permissionLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
         ) { result ->
-            // ✅ If ANY required permission is granted → proceed
             permissionGranted = result.values.any { it }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 🔴 Request permissions ONCE
-        requestMediaPermissions()
-
         setContent {
-            // ✅ UI is ALWAYS shown
             if (permissionGranted) {
                 AppRoot()
             } else {
                 PermissionWaitingScreen()
             }
         }
+
+        requestMediaPermission()
     }
 
-    private fun requestMediaPermissions() {
+    private fun requestMediaPermission() {
         val permissions =
             if (Build.VERSION.SDK_INT >= 33) {
                 arrayOf(
@@ -47,11 +43,9 @@ class MainActivity : ComponentActivity() {
                     Manifest.permission.READ_MEDIA_AUDIO
                 )
             } else {
-                arrayOf(
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-                )
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
 
-        mediaPermissionLauncher.launch(permissions)
+        permissionLauncher.launch(permissions)
     }
 }
