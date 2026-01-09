@@ -10,9 +10,7 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-/* ───────────────────────────────────────────── */
-/* Helpers */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Helpers ───────────────── */
 
 static SLuint32 toSlSampleRate(int sr) {
     switch (sr) {
@@ -33,15 +31,11 @@ static inline int16_t floatToPcm16(float v) {
     return static_cast<int16_t>(v * 32767.0f);
 }
 
-/* PCM16 staging buffer */
 static std::vector<int16_t> pcm16Buffer;
 
-/* ───────────────────────────────────────────── */
-/* Lifecycle */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Lifecycle ───────────────── */
 
-AudioEngine::AudioEngine(Clock* clock)
-        : clock_(clock) {}
+AudioEngine::AudioEngine(Clock* clock) : clock_(clock) {}
 
 AudioEngine::~AudioEngine() {
     stop();
@@ -49,9 +43,7 @@ AudioEngine::~AudioEngine() {
     cleanupOpenSL();
 }
 
-/* ───────────────────────────────────────────── */
-/* Open */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Open ───────────────── */
 
 bool AudioEngine::open(const char* path) {
     extractor_ = AMediaExtractor_new();
@@ -98,16 +90,10 @@ bool AudioEngine::open(const char* path) {
     return AMediaCodec_start(codec_) == AMEDIA_OK;
 }
 
-/* ───────────────────────────────────────────── */
-/* OpenSL ES */
-/* ───────────────────────────────────────────── */
+/* ───────────────── OpenSL ───────────────── */
 
 bool AudioEngine::setupOpenSL() {
-    SLresult r;
-
-    r = slCreateEngine(&engineObj_, 0, nullptr, 0, nullptr, nullptr);
-    if (r != SL_RESULT_SUCCESS) return false;
-
+    slCreateEngine(&engineObj_, 0, nullptr, 0, nullptr, nullptr);
     (*engineObj_)->Realize(engineObj_, SL_BOOLEAN_FALSE);
     (*engineObj_)->GetInterface(engineObj_, SL_IID_ENGINE, &engine_);
 
@@ -115,19 +101,19 @@ bool AudioEngine::setupOpenSL() {
     (*outputMix_)->Realize(outputMix_, SL_BOOLEAN_FALSE);
 
     SLDataLocator_AndroidSimpleBufferQueue locBufQ = {
-            SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 2
+        SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 2
     };
 
     SLDataFormat_PCM pcm = {
-            SL_DATAFORMAT_PCM,
-            (SLuint32) channelCount_,
-            toSlSampleRate(sampleRate_),
-            SL_PCMSAMPLEFORMAT_FIXED_16,
-            SL_PCMSAMPLEFORMAT_FIXED_16,
-            channelCount_ == 1
-                ? SL_SPEAKER_FRONT_CENTER
-                : (SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT),
-            SL_BYTEORDER_LITTLEENDIAN
+        SL_DATAFORMAT_PCM,
+        (SLuint32)channelCount_,
+        toSlSampleRate(sampleRate_),
+        SL_PCMSAMPLEFORMAT_FIXED_16,
+        SL_PCMSAMPLEFORMAT_FIXED_16,
+        channelCount_ == 1
+            ? SL_SPEAKER_FRONT_CENTER
+            : (SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT),
+        SL_BYTEORDER_LITTLEENDIAN
     };
 
     SLDataSource src = { &locBufQ, &pcm };
@@ -137,29 +123,27 @@ bool AudioEngine::setupOpenSL() {
     const SLInterfaceID ids[] = { SL_IID_BUFFERQUEUE };
     const SLboolean req[] = { SL_BOOLEAN_TRUE };
 
-    (*engine_)->CreateAudioPlayer(
-            engine_, &playerObj_, &src, &sink, 1, ids, req
-    );
-
+    (*engine_)->CreateAudioPlayer(engine_, &playerObj_, &src, &sink, 1, ids, req);
     (*playerObj_)->Realize(playerObj_, SL_BOOLEAN_FALSE);
     (*playerObj_)->GetInterface(playerObj_, SL_IID_PLAY, &player_);
     (*playerObj_)->GetInterface(playerObj_, SL_IID_BUFFERQUEUE, &bufferQueue_);
 
-    (*bufferQueue_)->RegisterCallback(
-            bufferQueue_, bufferQueueCallback, this
-    );
+    (*bufferQueue_)->RegisterCallback(bufferQueue_, bufferQueueCallback, this);
 
     buffersAvailable_ = 2;
     return true;
 }
 
-/* ───────────────────────────────────────────── */
-/* Start / Stop */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Start / Stop ───────────────── */
 
 void AudioEngine::start() {
     running_ = true;
     clock_->setUs(0);
+
+    // 🔑 PRIME OpenSL (ABSOLUTELY REQUIRED)
+    static int16_t silence[1024] = {0};
+    (*bufferQueue_)->Enqueue(bufferQueue_, silence, sizeof(silence));
+    buffersAvailable_ = 1;
 
     (*player_)->SetPlayState(player_, SL_PLAYSTATE_PLAYING);
     decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
@@ -167,43 +151,27 @@ void AudioEngine::start() {
 
 void AudioEngine::stop() {
     running_ = false;
-
     if (decodeThread_.joinable())
         decodeThread_.join();
-
     if (player_)
         (*player_)->SetPlayState(player_, SL_PLAYSTATE_STOPPED);
 }
 
-/* ───────────────────────────────────────────── */
-/* Seek */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Seek ───────────────── */
 
 void AudioEngine::seekUs(int64_t us) {
     if (!extractor_ || !codec_) return;
 
-    running_ = false;
-    if (decodeThread_.joinable())
-        decodeThread_.join();
+    stop();
 
-    AMediaExtractor_seekTo(
-            extractor_,
-            us,
-            AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC
-    );
-
+    AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
     AMediaCodec_flush(codec_);
-
     clock_->setUs(us);
-    buffersAvailable_ = 2;
 
-    running_ = true;
-    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
+    start();
 }
 
-/* ───────────────────────────────────────────── */
-/* Decode loop */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Decode ───────────────── */
 
 void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
@@ -217,10 +185,8 @@ void AudioEngine::decodeLoop() {
             ssize_t sz = AMediaExtractor_readSampleData(extractor_, buf, cap);
 
             if (sz < 0) {
-                AMediaCodec_queueInputBuffer(
-                        codec_, in, 0, 0, 0,
-                        AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
-                );
+                AMediaCodec_queueInputBuffer(codec_, in, 0, 0, 0,
+                    AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
             } else {
                 int64_t pts = AMediaExtractor_getSampleTime(extractor_);
                 AMediaCodec_queueInputBuffer(codec_, in, 0, sz, pts, 0);
@@ -236,27 +202,20 @@ void AudioEngine::decodeLoop() {
 
             buffersAvailable_--;
 
-            size_t cap;
-            uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, out, &cap);
-            float* pcmFloat = reinterpret_cast<float*>(raw + info.offset);
+            uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, out, nullptr);
 
-            int sampleCount = info.size / sizeof(float);
+            int sampleCount = info.size / sizeof(int16_t);
             pcm16Buffer.resize(sampleCount);
-
-            for (int i = 0; i < sampleCount; i++) {
-                pcm16Buffer[i] = floatToPcm16(pcmFloat[i]);
-            }
+            memcpy(pcm16Buffer.data(), raw + info.offset, info.size);
 
             (*bufferQueue_)->Enqueue(
-                    bufferQueue_,
-                    pcm16Buffer.data(),
-                    pcm16Buffer.size() * sizeof(int16_t)
+                bufferQueue_,
+                pcm16Buffer.data(),
+                pcm16Buffer.size() * sizeof(int16_t)
             );
 
-            int frames = pcm16Buffer.size() / channelCount_;
-            int64_t deltaUs =
-                    (int64_t) frames * 1000000LL / sampleRate_;
-
+            int frames = sampleCount / channelCount_;
+            int64_t deltaUs = (int64_t)frames * 1000000LL / sampleRate_;
             clock_->addUs(deltaUs);
 
             AMediaCodec_releaseOutputBuffer(codec_, out, false);
@@ -264,43 +223,28 @@ void AudioEngine::decodeLoop() {
     }
 }
 
-/* ───────────────────────────────────────────── */
-/* Buffer callback */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Callback ───────────────── */
 
 void AudioEngine::bufferQueueCallback(
-        SLAndroidSimpleBufferQueueItf,
-        void* ctx
-) {
-    auto* self = static_cast<AudioEngine*>(ctx);
-    self->buffersAvailable_++;
+    SLAndroidSimpleBufferQueueItf, void* ctx) {
+    static_cast<AudioEngine*>(ctx)->buffersAvailable_++;
 }
 
-/* ───────────────────────────────────────────── */
-/* Cleanup */
-/* ───────────────────────────────────────────── */
+/* ───────────────── Cleanup ───────────────── */
 
 void AudioEngine::cleanupCodec() {
-    if (codec_) {
-        AMediaCodec_stop(codec_);
-        AMediaCodec_delete(codec_);
-        codec_ = nullptr;
-    }
-    if (format_) {
-        AMediaFormat_delete(format_);
-        format_ = nullptr;
-    }
-    if (extractor_) {
-        AMediaExtractor_delete(extractor_);
-        extractor_ = nullptr;
-    }
+    if (codec_) AMediaCodec_delete(codec_);
+    if (format_) AMediaFormat_delete(format_);
+    if (extractor_) AMediaExtractor_delete(extractor_);
+    codec_ = nullptr;
+    format_ = nullptr;
+    extractor_ = nullptr;
 }
 
 void AudioEngine::cleanupOpenSL() {
     if (playerObj_) (*playerObj_)->Destroy(playerObj_);
     if (outputMix_) (*outputMix_)->Destroy(outputMix_);
     if (engineObj_) (*engineObj_)->Destroy(engineObj_);
-
     playerObj_ = nullptr;
     bufferQueue_ = nullptr;
     player_ = nullptr;
