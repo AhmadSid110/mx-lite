@@ -36,6 +36,7 @@ private val VIDEO_EXTENSIONS = setOf(
 private fun File.isVideo(): Boolean =
     isFile && extension.lowercase() in VIDEO_EXTENSIONS
 
+/** FAST — no recursion */
 private fun File.containsVideoShallow(): Boolean {
     if (!isDirectory) return false
     return listFiles()?.any { it.isVideo() } == true
@@ -60,32 +61,41 @@ fun FileBrowserScreen(
     val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
 
-    /* 🔴 DELAY ROOT BINDING (CRITICAL) */
+    /* 🔴 DELAY ROOT DIRECTORY BINDING */
     var rootDir by remember { mutableStateOf<File?>(null) }
     var currentDir by remember { mutableStateOf<File?>(null) }
 
     LaunchedEffect(Unit) {
-        delay(300)
+        delay(300) // allow permission + storage settle
         val dir = File("/storage/emulated/0")
         rootDir = dir
         currentDir = dir
     }
 
+    /* 🔴 GUARD — prevents crash */
     if (rootDir == null || currentDir == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
             CircularProgressIndicator()
         }
         return
     }
 
+    val safeRoot = rootDir!!
+    val safeDir = currentDir!!
+
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
 
     /* ───────── Back handling ───────── */
-    BackHandler(enabled = currentSafDir != null || currentDir != rootDir) {
+    BackHandler(
+        enabled = currentSafDir != null || safeDir != safeRoot
+    ) {
         when {
             currentSafDir != null -> currentSafDir = null
-            currentDir != rootDir -> currentDir = currentDir!!.parentFile ?: rootDir
+            safeDir != safeRoot -> currentDir = safeDir.parentFile ?: safeRoot
         }
     }
 
@@ -111,25 +121,26 @@ fun FileBrowserScreen(
             }
         }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
 
+        /* ───────── Top bar ───────── */
         TopAppBar(
             title = {
                 Text(
                     when {
                         currentSafDir != null -> "Folders"
-                        currentDir != rootDir -> currentDir!!.name
+                        safeDir != safeRoot -> safeDir.name
                         else -> "Videos"
                     }
                 )
             },
             navigationIcon = {
-                if (currentSafDir != null || currentDir != rootDir) {
+                if (currentSafDir != null || safeDir != safeRoot) {
                     IconButton(onClick = {
                         when {
                             currentSafDir != null -> currentSafDir = null
-                            currentDir != rootDir ->
-                                currentDir = currentDir!!.parentFile ?: rootDir
+                            safeDir != safeRoot ->
+                                currentDir = safeDir.parentFile ?: safeRoot
                         }
                     }) {
                         Text("←")
@@ -143,12 +154,13 @@ fun FileBrowserScreen(
             }
         )
 
-        /* ───────── SAF root ───────── */
+        /* ───────── SAF root folders ───────── */
         if (currentSafDir == null && safFolders.isNotEmpty()) {
             LazyColumn {
                 items(safFolders) { uri ->
                     FolderCard(uri.lastPathSegment ?: "Folder") {
-                        currentSafDir = DocumentFile.fromTreeUri(context, uri)
+                        currentSafDir =
+                            DocumentFile.fromTreeUri(context, uri)
                     }
                 }
             }
@@ -158,7 +170,8 @@ fun FileBrowserScreen(
         /* ───────── SAF browsing ───────── */
         if (currentSafDir != null) {
             val children = remember(currentSafDir) {
-                currentSafDir!!.listFiles()
+                currentSafDir!!
+                    .listFiles()
                     .sortedWith(compareBy<DocumentFile> { !it.isDirectory })
             }
 
@@ -178,13 +191,14 @@ fun FileBrowserScreen(
             return@Column
         }
 
-        /* ───────── Local filesystem (cached) ───────── */
+        /* ───────── Local filesystem (cached + IO) ───────── */
 
         var entries by remember { mutableStateOf<List<File>>(emptyList()) }
         var loading by remember { mutableStateOf(true) }
 
-        LaunchedEffect(currentDir) {
-            val path = currentDir!!.absolutePath
+        LaunchedEffect(safeDir) {
+            val path = safeDir.absolutePath
+
             directoryCache[path]?.let {
                 entries = it
                 loading = false
@@ -192,23 +206,32 @@ fun FileBrowserScreen(
             }
 
             loading = true
+
             val result = withContext(Dispatchers.IO) {
-                currentDir!!.listFiles()
-                    ?.filter {
-                        it.isVideo() ||
-                            (it.isDirectory && it.containsVideoShallow())
-                    }
-                    ?.sortedWith(compareBy<File> { !it.isDirectory })
-                    ?: emptyList()
+                runCatching {
+                    safeDir.listFiles()
+                        ?.filter {
+                            it.isVideo() ||
+                                (it.isDirectory && it.containsVideoShallow())
+                        }
+                        ?.sortedWith(compareBy<File> { !it.isDirectory })
+                        ?: emptyList()
+                }.getOrElse { emptyList() }
             }
 
-            directoryCache[path] = result
+            if (result.isNotEmpty()) {
+                directoryCache[path] = result
+            }
+
             entries = result
             loading = false
         }
 
         if (loading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
                 CircularProgressIndicator()
             }
             return@Column
@@ -224,6 +247,10 @@ fun FileBrowserScreen(
         }
     }
 }
+
+/* ───────────────────────────────────────────── */
+/* Reusable card */
+/* ───────────────────────────────────────────── */
 
 @Composable
 private fun FolderCard(
