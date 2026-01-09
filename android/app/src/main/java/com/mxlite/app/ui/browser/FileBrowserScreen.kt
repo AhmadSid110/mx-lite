@@ -19,7 +19,9 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.storage.SafFileCopier
 import com.mxlite.app.storage.StorageStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /* ───────────────────────────────────────────── */
@@ -33,14 +35,17 @@ private val VIDEO_EXTENSIONS = setOf(
 private fun File.isVideo(): Boolean =
     isFile && extension.lowercase() in VIDEO_EXTENSIONS
 
-private fun File.containsVideoRecursively(): Boolean {
+/** FAST check — no recursion */
+private fun File.containsVideoShallow(): Boolean {
     if (!isDirectory) return false
-    listFiles()?.forEach {
-        if (it.isVideo()) return true
-        if (it.isDirectory && it.containsVideoRecursively()) return true
-    }
-    return false
+    return listFiles()?.any { it.isVideo() } == true
 }
+
+/* ───────────────────────────────────────────── */
+/* Directory cache (CRITICAL for performance) */
+/* ───────────────────────────────────────────── */
+
+private val directoryCache = mutableMapOf<String, List<File>>()
 
 /* ───────────────────────────────────────────── */
 /* UI */
@@ -86,6 +91,7 @@ fun FileBrowserScreen(
                 scope.launch {
                     store.addFolder(uri)
                     safFolders = store.getFolders()
+                    directoryCache.clear() // 🔥 invalidate cache
                 }
             }
         }
@@ -108,7 +114,8 @@ fun FileBrowserScreen(
                     IconButton(onClick = {
                         when {
                             currentSafDir != null -> currentSafDir = null
-                            currentDir != rootDir -> currentDir = currentDir.parentFile ?: rootDir
+                            currentDir != rootDir ->
+                                currentDir = currentDir.parentFile ?: rootDir
                         }
                     }) {
                         Text("←")
@@ -131,7 +138,8 @@ fun FileBrowserScreen(
                             .fillMaxWidth()
                             .padding(12.dp)
                             .clickable {
-                                currentSafDir = DocumentFile.fromTreeUri(context, uri)
+                                currentSafDir =
+                                    DocumentFile.fromTreeUri(context, uri)
                             },
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -166,7 +174,11 @@ fun FileBrowserScreen(
                                 if (doc.isDirectory) {
                                     currentSafDir = doc
                                 } else {
-                                    val file = SafFileCopier.copyToCache(context, doc.uri)
+                                    val file =
+                                        SafFileCopier.copyToCache(
+                                            context,
+                                            doc.uri
+                                        )
                                     onFileSelected(file)
                                 }
                             },
@@ -189,14 +201,45 @@ fun FileBrowserScreen(
             return@Column
         }
 
-        /* ───────── Local filesystem browsing ───────── */
-        val entries = remember(currentDir) {
-            currentDir.listFiles()
-                ?.filter {
-                    it.isVideo() || (it.isDirectory && it.containsVideoRecursively())
-                }
-                ?.sortedWith(compareBy<File> { !it.isDirectory })
-                ?: emptyList()
+        /* ───────── Local filesystem browsing (CACHED + IO thread) ───────── */
+
+        var entries by remember { mutableStateOf<List<File>>(emptyList()) }
+        var loading by remember { mutableStateOf(true) }
+
+        LaunchedEffect(currentDir) {
+            val path = currentDir.absolutePath
+
+            directoryCache[path]?.let {
+                entries = it
+                loading = false
+                return@LaunchedEffect
+            }
+
+            loading = true
+
+            val result = withContext(Dispatchers.IO) {
+                currentDir.listFiles()
+                    ?.filter {
+                        it.isVideo() ||
+                            (it.isDirectory && it.containsVideoShallow())
+                    }
+                    ?.sortedWith(compareBy<File> { !it.isDirectory })
+                    ?: emptyList()
+            }
+
+            directoryCache[path] = result
+            entries = result
+            loading = false
+        }
+
+        if (loading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+            return@Column
         }
 
         LazyColumn {
