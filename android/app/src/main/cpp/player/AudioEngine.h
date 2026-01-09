@@ -7,7 +7,6 @@
 #include <thread>
 #include <atomic>
 #include <cstdint>
-#include <vector>
 
 #include "Clock.h"
 
@@ -19,25 +18,31 @@ public:
     bool open(const char* path);
     void start();
     void stop();
+
+    // MUST be int64_t (not long)
     void seekUs(int64_t us);
 
 private:
+    // Decode thread (audio master)
     void decodeLoop();
 
+    // AAudio
     bool setupAAudio();
     void cleanupAAudio();
+
+    // Media
     void cleanupCodec();
 
 private:
-    // MASTER CLOCK (audio-driven)
-    Clock* clock_;
+    // Master clock
+    Clock* clock_ = nullptr;
 
     // Media
     AMediaExtractor* extractor_ = nullptr;
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
 
-    // Audio output
+    // AAudio
     AAudioStream* stream_ = nullptr;
 
     // Threading
@@ -47,8 +52,4 @@ private:
     // Audio format
     int sampleRate_ = 44100;
     int channelCount_ = 2;
-    int pcmEncoding_ = AMEDIAFORMAT_PCM_ENCODING_PCM_16BIT;
-
-    // Conversion buffer (for PCM_FLOAT → PCM_16)
-    std::vector<int16_t> pcm16Buffer_;
 };
