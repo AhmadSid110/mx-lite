@@ -3,27 +3,15 @@ package com.mxlite.app.player
 import android.view.Surface
 import java.io.File
 
-/**
- * Central playback coordinator.
- *
- * RULES (NON-NEGOTIABLE):
- * - Native C++ audio is the ONLY master clock
- * - Video MUST NOT start until audio clock ADVANCES
- * - Java NEVER controls timing
- */
 class PlayerController : PlayerEngine {
 
     private val nativeClock = NativeClock()
     private val video = MediaCodecEngine(clock = nativeClock)
 
-    // Used ONLY to detect presence of audio track
+    // ONLY for detecting audio track
     private val legacyAudio = AudioCodecEngine()
 
     private var hasAudio = false
-
-    /* ───────────────────────────────────────────── */
-    /* PlayerEngine implementation */
-    /* ───────────────────────────────────────────── */
 
     override val durationMs: Long
         get() = video.durationMs
@@ -43,29 +31,16 @@ class PlayerController : PlayerEngine {
     override fun play(file: File) {
         release()
 
-        // 1️⃣ Detect audio track BEFORE starting anything
+        // 1️⃣ Detect audio track
         hasAudio = legacyAudio.hasAudioTrack(file)
 
+        // 2️⃣ Start native audio FIRST (if present)
         if (hasAudio) {
-            // 2️⃣ Start NATIVE AUDIO FIRST
             NativePlayer.nativePlay(file.absolutePath)
-
-            // 3️⃣ WAIT UNTIL AUDIO CLOCK ACTUALLY ADVANCES
-            var lastClock = 0L
-            var retries = 0
-
-            while (retries < 200) { // ~2 seconds max
-                val now = nativeClock.positionMs
-                if (now > lastClock) {
-                    break // 🔑 AUDIO IS RENDERING
-                }
-                lastClock = now
-                Thread.sleep(10)
-                retries++
-            }
         }
 
-        // 4️⃣ Start VIDEO ONLY AFTER AUDIO CLOCK IS LIVE
+        // 3️⃣ Start video immediately
+        // 🔑 Video will sync itself to audio clock when audio becomes active
         video.play(file)
     }
 
