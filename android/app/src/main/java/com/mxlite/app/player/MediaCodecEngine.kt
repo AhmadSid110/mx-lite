@@ -6,7 +6,7 @@ import android.media.MediaFormat
 import android.view.Surface
 import java.io.File
 import kotlin.concurrent.thread
-import kotlin.math.abs
+import kotlin.math.min
 
 class MediaCodecEngine(
     private val clock: PlaybackClock
@@ -44,9 +44,9 @@ class MediaCodecEngine(
         val format = extractor!!.getTrackFormat(trackIndex)
 
         durationMs =
-            if (format.containsKey(MediaFormat.KEY_DURATION)) {
+            if (format.containsKey(MediaFormat.KEY_DURATION))
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
-            } else 0L
+            else 0L
 
         val mime = format.getString(MediaFormat.KEY_MIME)!!
 
@@ -65,11 +65,9 @@ class MediaCodecEngine(
         val extractor = extractor ?: return
         val info = MediaCodec.BufferInfo()
 
-        var lastClockMs = 0L
-
         while (running) {
 
-            // ---------- INPUT ----------
+            // ───── INPUT ─────
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 val buffer = codec.getInputBuffer(inIndex)!!
@@ -95,33 +93,26 @@ class MediaCodecEngine(
                 }
             }
 
-            // ---------- OUTPUT ----------
+            // ───── OUTPUT ─────
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
             if (outIndex < 0) continue
 
             val videoPtsMs = info.presentationTimeUs / 1000
+            val audioMs = clock.positionMs
 
-            // 🔒 HARD BLOCK until AUDIO CLOCK ADVANCES
-            while (running) {
-                val audioMs = clock.positionMs
-                if (audioMs > lastClockMs) {
-                    lastClockMs = audioMs
-                    break
-                }
-                Thread.sleep(5)
-            }
+            // Audio not started yet → fallback to video PTS
+            val masterMs =
+                if (audioMs > 0) audioMs else videoPtsMs
 
-            val delta = videoPtsMs - lastClockMs
+            val delta = videoPtsMs - masterMs
 
             when {
-                // Too early → wait
-                delta > 20 -> {
-                    Thread.sleep(10)
-                    codec.releaseOutputBuffer(outIndex, false)
-                    continue
+                // Video early → short sleep
+                delta > 15 -> {
+                    Thread.sleep(min(delta, 10))
                 }
 
-                // Too late → drop frame
+                // Video late → drop frame
                 delta < -40 -> {
                     codec.releaseOutputBuffer(outIndex, false)
                     continue
