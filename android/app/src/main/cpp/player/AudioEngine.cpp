@@ -171,9 +171,7 @@ void AudioEngine::stop() {
 void AudioEngine::seekUs(long us) {
     if (!extractor_ || !codec_) return;
 
-    running_ = false;
-    if (decodeThread_.joinable())
-        decodeThread_.join();
+    stop();
 
     AMediaExtractor_seekTo(
         extractor_,
@@ -182,12 +180,10 @@ void AudioEngine::seekUs(long us) {
     );
 
     AMediaCodec_flush(codec_);
-
     clock_->setUs(us);
 
     buffersAvailable_ = 2;
-    running_ = true;
-    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
+    start();
 }
 
 /* ───────────────────────────── */
@@ -227,18 +223,19 @@ void AudioEngine::decodeLoop() {
 
             size_t cap;
             uint8_t* buf = AMediaCodec_getOutputBuffer(codec_, out, &cap);
+
+            // Calculate buffer duration ONLY (no clock update here)
+            int frames = info.size / (2 * channelCount_);
+            int64_t durationUs =
+                (int64_t)frames * 1000000LL / sampleRate_;
+
+            lastBufferDurationUs_.store(durationUs, std::memory_order_relaxed);
+
             (*bufferQueue_)->Enqueue(
                 bufferQueue_,
                 buf + info.offset,
                 info.size
             );
-
-            // 🔑 MASTER CLOCK UPDATE (audio-render based)
-            int frames = info.size / (2 * channelCount_);
-            int64_t deltaUs =
-                (int64_t)frames * 1000000LL / sampleRate_;
-
-            clock_->addUs(deltaUs);
 
             AMediaCodec_releaseOutputBuffer(codec_, out, false);
         }
@@ -246,7 +243,7 @@ void AudioEngine::decodeLoop() {
 }
 
 /* ───────────────────────────── */
-/* Buffer callback */
+/* Buffer callback — REAL CLOCK */
 /* ───────────────────────────── */
 
 void AudioEngine::bufferQueueCallback(
@@ -254,6 +251,11 @@ void AudioEngine::bufferQueueCallback(
     void* ctx
 ) {
     auto* self = static_cast<AudioEngine*>(ctx);
+
+    int64_t deltaUs =
+        self->lastBufferDurationUs_.load(std::memory_order_relaxed);
+
+    self->clock_->addUs(deltaUs);
     self->buffersAvailable_++;
 }
 
