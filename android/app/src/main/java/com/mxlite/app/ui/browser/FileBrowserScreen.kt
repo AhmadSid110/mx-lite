@@ -1,6 +1,8 @@
 package com.mxlite.app.ui.browser
 
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -142,9 +144,12 @@ fun FileBrowserScreen(
                         if (doc.isDirectory) {
                             currentSafDir = doc
                         } else {
-                            onFileSelected(
-                                SafFileCopier.copyToCache(context, doc.uri)
-                            )
+                            scope.launch {
+                                val cachedFile = withContext(Dispatchers.IO) {
+                                    SafFileCopier.copyToCache(context, doc.uri)
+                                }
+                                onFileSelected(cachedFile)
+                            }
                         }
                     }
                 }
@@ -161,9 +166,12 @@ fun FileBrowserScreen(
             LazyColumn {
                 items(folderVideos) { video ->
                     FolderCard(video.name) {
-                        onFileSelected(
-                            SafFileCopier.copyToCache(context, video.contentUri)
-                        )
+                        scope.launch {
+                            val cachedFile = withContext(Dispatchers.IO) {
+                                SafFileCopier.copyToCache(context, video.contentUri)
+                            }
+                            onFileSelected(cachedFile)
+                        }
                     }
                 }
             }
