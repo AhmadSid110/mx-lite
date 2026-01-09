@@ -20,14 +20,12 @@ public:
     void start();
     void stop();
 
-    // ⚠️ MUST be `long` (ABI match with JNI)
-    void seekUs(long us);
+    // ⚠️ MUST BE int64_t (NOT long)
+    void seekUs(int64_t us);
 
 private:
-    // Decode
     void decodeLoop();
 
-    // OpenSL ES
     bool setupOpenSL();
     void cleanupOpenSL();
     void cleanupCodec();
@@ -38,15 +36,12 @@ private:
     );
 
 private:
-    // MASTER CLOCK
     Clock* clock_;
 
-    // Media
     AMediaExtractor* extractor_ = nullptr;
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
 
-    // OpenSL ES
     SLObjectItf engineObj_ = nullptr;
     SLEngineItf engine_ = nullptr;
     SLObjectItf outputMix_ = nullptr;
@@ -54,12 +49,11 @@ private:
     SLPlayItf player_ = nullptr;
     SLAndroidSimpleBufferQueueItf bufferQueue_ = nullptr;
 
-    // State
     std::atomic<bool> running_{false};
     std::thread decodeThread_;
+
     std::atomic<int> buffersAvailable_{0};
 
-    // Audio format
     int sampleRate_ = 44100;
     int channelCount_ = 2;
 };
