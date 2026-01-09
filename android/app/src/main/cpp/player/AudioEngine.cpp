@@ -2,6 +2,7 @@
 #include <android/log.h>
 #include <cstring>
 #include <unistd.h>
+#include <algorithm>
 
 #define LOG_TAG "AudioEngine"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -51,10 +52,17 @@ bool AudioEngine::open(const char* path) {
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sampleRate_);
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &channelCount_);
 
+    // Detect PCM encoding
+    pcmEncoding_ = AMEDIAFORMAT_PCM_ENCODING_PCM_16BIT;
+    AMediaFormat_getInt32(
+        format_, AMEDIAFORMAT_KEY_PCM_ENCODING, &pcmEncoding_
+    );
+
     const char* mime = nullptr;
     AMediaFormat_getString(format_, AMEDIAFORMAT_KEY_MIME, &mime);
     codec_ = AMediaCodec_createDecoderByType(mime);
     if (!codec_) return false;
+
     if (AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0) != AMEDIA_OK)
         return false;
 
@@ -131,6 +139,7 @@ void AudioEngine::seekUs(int64_t us) {
 
 void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
+    std::vector<int16_t> pcm16;
 
     while (running_) {
         ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 10000);
@@ -159,11 +168,31 @@ void AudioEngine::decodeLoop() {
 
             size_t cap;
             uint8_t* buf = AMediaCodec_getOutputBuffer(codec_, out, &cap);
-            (*bufferQueue_)->Enqueue(
-                bufferQueue_, buf + info.offset, info.size
-            );
 
-            int frames = info.size / (2 * channelCount_);
+            int frames;
+            if (pcmEncoding_ == AMEDIAFORMAT_PCM_ENCODING_PCM_FLOAT) {
+                int samples = info.size / sizeof(float);
+                pcm16.resize(samples);
+                float* f = (float*)(buf + info.offset);
+                for (int i = 0; i < samples; i++) {
+                    float v = std::max(-1.0f, std::min(1.0f, f[i]));
+                    pcm16[i] = (int16_t)(v * 32767.0f);
+                }
+                (*bufferQueue_)->Enqueue(
+                    bufferQueue_,
+                    pcm16.data(),
+                    pcm16.size() * sizeof(int16_t)
+                );
+                frames = samples / channelCount_;
+            } else {
+                (*bufferQueue_)->Enqueue(
+                    bufferQueue_,
+                    buf + info.offset,
+                    info.size
+                );
+                frames = info.size / (2 * channelCount_);
+            }
+
             int64_t deltaUs =
                 (int64_t)frames * 1000000LL / sampleRate_;
             clock_->setUs(clock_->getUs() + deltaUs);
