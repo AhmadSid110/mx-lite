@@ -2,6 +2,7 @@
 
 #include <media/NdkMediaExtractor.h>
 #include <media/NdkMediaCodec.h>
+#include <media/NdkMediaFormat.h>   // ✅ REQUIRED
 #include <SLES/OpenSLES.h>
 #include <SLES/OpenSLES_Android.h>
 
@@ -20,7 +21,7 @@ public:
     void start();
     void stop();
 
-    // ⚠️ MUST BE int64_t (NOT long)
+    // ⚠️ MUST match cpp exactly
     void seekUs(int64_t us);
 
 private:
@@ -36,12 +37,18 @@ private:
     );
 
 private:
+    /* ───────── MASTER CLOCK ───────── */
     Clock* clock_;
 
+    /* ───────── MediaCodec ───────── */
     AMediaExtractor* extractor_ = nullptr;
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
 
+    // 🔑 REQUIRED: decoder output PCM format
+    int pcmEncoding_ = AMEDIAFORMAT_PCM_ENCODING_PCM_16BIT;
+
+    /* ───────── OpenSL ES ───────── */
     SLObjectItf engineObj_ = nullptr;
     SLEngineItf engine_ = nullptr;
     SLObjectItf outputMix_ = nullptr;
@@ -49,11 +56,12 @@ private:
     SLPlayItf player_ = nullptr;
     SLAndroidSimpleBufferQueueItf bufferQueue_ = nullptr;
 
+    /* ───────── State ───────── */
     std::atomic<bool> running_{false};
     std::thread decodeThread_;
-
     std::atomic<int> buffersAvailable_{0};
 
+    /* ───────── Audio format ───────── */
     int sampleRate_ = 44100;
     int channelCount_ = 2;
 };
