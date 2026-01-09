@@ -6,6 +6,7 @@ import android.media.MediaFormat
 import android.view.Surface
 import java.io.File
 import kotlin.concurrent.thread
+import kotlin.math.min
 
 class MediaCodecEngine(
     private val clock: PlaybackClock
@@ -42,13 +43,10 @@ class MediaCodecEngine(
 
         val format = extractor!!.getTrackFormat(trackIndex)
 
-        // Duration is in microseconds
         durationMs =
             if (format.containsKey(MediaFormat.KEY_DURATION)) {
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
-            } else {
-                0L
-            }
+            } else 0L
 
         val mime = format.getString(MediaFormat.KEY_MIME)!!
 
@@ -69,6 +67,7 @@ class MediaCodecEngine(
 
         while (running) {
 
+            // ---------- INPUT ----------
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
                 val buffer = codec.getInputBuffer(inIndex)!!
@@ -94,22 +93,38 @@ class MediaCodecEngine(
                 }
             }
 
+            // ---------- OUTPUT ----------
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
-            if (outIndex >= 0) {
 
-                val videoPtsMs = info.presentationTimeUs / 1000
-                val clockMs = resolveClockMs(info)
-                val delta = videoPtsMs - clockMs
+            when {
+                outIndex >= 0 -> {
+                    val videoPtsMs = info.presentationTimeUs / 1000
+                    val clockMs = resolveClockMs(info)
+                    val delta = videoPtsMs - clockMs
 
-                when {
-                    delta > 30 -> Thread.sleep(delta)
-                    delta < -50 -> {
-                        codec.releaseOutputBuffer(outIndex, false)
-                        continue
+                    when {
+                        // Video early → sleep SMALL chunks
+                        delta > 15 -> {
+                            Thread.sleep(min(delta, 10))
+                        }
+
+                        // Video late → drop frame
+                        delta < -30 -> {
+                            codec.releaseOutputBuffer(outIndex, false)
+                            continue
+                        }
                     }
+
+                    codec.releaseOutputBuffer(outIndex, true)
                 }
 
-                codec.releaseOutputBuffer(outIndex, true)
+                outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    // ignore safely
+                }
+
+                outIndex == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    // nothing
+                }
             }
 
             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
@@ -120,15 +135,11 @@ class MediaCodecEngine(
 
     /**
      * Audio-first clock.
-     * If audio is not active, fall back to video PTS.
+     * Fallback to video PTS if audio not active.
      */
     private fun resolveClockMs(info: MediaCodec.BufferInfo): Long {
         val audioMs = clock.positionMs
-        return if (audioMs > 0) {
-            audioMs
-        } else {
-            info.presentationTimeUs / 1000
-        }
+        return if (audioMs > 0) audioMs else info.presentationTimeUs / 1000
     }
 
     private fun selectVideoTrack(extractor: MediaExtractor): Int {
