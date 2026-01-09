@@ -31,8 +31,8 @@ import java.io.File
 /* Helpers */
 /* ───────────────────────────────────────────── */
 
-private fun extractFolderDisplayName(folder: String): String =
-    folder.split('/').lastOrNull() ?: folder
+private fun extractFolderDisplayName(folder: String?): String =
+    folder?.split('/')?.lastOrNull() ?: DEFAULT_FOLDER_NAME
 
 /* ───────────────────────────────────────────── */
 /* UI */
@@ -94,7 +94,7 @@ fun FileBrowserScreen(
                 Text(
                     when {
                         currentSafDir != null -> "Folders"
-                        currentFolder != null -> extractFolderDisplayName(currentFolder!!)
+                        currentFolder != null -> extractFolderDisplayName(currentFolder)
                         else -> DEFAULT_FOLDER_NAME
                     }
                 )
