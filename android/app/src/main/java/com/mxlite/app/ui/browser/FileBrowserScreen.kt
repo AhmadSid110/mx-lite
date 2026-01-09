@@ -2,6 +2,7 @@ package com.mxlite.app.ui.browser
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,7 +21,6 @@ import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.storage.SafFileCopier
 import com.mxlite.app.storage.StorageStore
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -35,14 +35,13 @@ private val VIDEO_EXTENSIONS = setOf(
 private fun File.isVideo(): Boolean =
     isFile && extension.lowercase() in VIDEO_EXTENSIONS
 
-/** FAST check — no recursion */
-private fun File.containsVideoShallow(): Boolean {
-    if (!isDirectory) return false
-    return listFiles()?.any { it.isVideo() } == true
-}
+private fun File.containsVideoShallowSafe(): Boolean =
+    runCatching {
+        isDirectory && listFiles()?.any { it.isVideo() } == true
+    }.getOrDefault(false)
 
 /* ───────────────────────────────────────────── */
-/* Simple in-memory cache */
+/* Cache */
 /* ───────────────────────────────────────────── */
 
 private val directoryCache = mutableMapOf<String, List<File>>()
@@ -57,11 +56,13 @@ fun FileBrowserScreen(
     onFileSelected: (File) -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
+    val scope = rememberCoroutineScope()
 
-    // ✅ Stable, NON-null root directory
-    val rootDir = remember { File("/storage/emulated/0") }
+    /* ✅ SAFE ROOT DIRECTORY */
+    val rootDir = remember {
+        Environment.getExternalStorageDirectory()
+    }
     var currentDir by remember { mutableStateOf(rootDir) }
 
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -79,7 +80,7 @@ fun FileBrowserScreen(
         safFolders = store.getFolders()
     }
 
-    /* ───────── SAF folder picker ───────── */
+    /* ───────── SAF picker ───────── */
     val folderPicker =
         rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree()
@@ -92,7 +93,7 @@ fun FileBrowserScreen(
                 scope.launch {
                     store.addFolder(uri)
                     safFolders = store.getFolders()
-                    directoryCache.clear() // invalidate cache
+                    directoryCache.clear()
                 }
             }
         }
@@ -130,7 +131,7 @@ fun FileBrowserScreen(
             }
         )
 
-        /* ───────── SAF root folders ───────── */
+        /* ───────── SAF root ───────── */
         if (currentSafDir == null && safFolders.isNotEmpty()) {
             LazyColumn {
                 items(safFolders) { uri ->
@@ -166,7 +167,7 @@ fun FileBrowserScreen(
             return@Column
         }
 
-        /* ───────── Local filesystem (cached + IO) ───────── */
+        /* ───────── Local filesystem (SAFE + CACHED) ───────── */
 
         var entries by remember { mutableStateOf<List<File>>(emptyList()) }
         var loading by remember { mutableStateOf(true) }
@@ -181,17 +182,23 @@ fun FileBrowserScreen(
             }
 
             loading = true
+
             val result = withContext(Dispatchers.IO) {
-                currentDir.listFiles()
-                    ?.filter {
-                        it.isVideo() ||
-                            (it.isDirectory && it.containsVideoShallow())
-                    }
-                    ?.sortedWith(compareBy<File> { !it.isDirectory })
-                    ?: emptyList()
+                runCatching {
+                    currentDir.listFiles()
+                        ?.filter {
+                            it.isVideo() ||
+                                (it.isDirectory && it.containsVideoShallowSafe())
+                        }
+                        ?.sortedWith(compareBy<File> { !it.isDirectory })
+                        ?: emptyList()
+                }.getOrDefault(emptyList())
             }
 
-            directoryCache[path] = result
+            if (result.isNotEmpty()) {
+                directoryCache[path] = result
+            }
+
             entries = result
             loading = false
         }
