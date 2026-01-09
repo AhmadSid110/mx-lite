@@ -23,4 +23,5 @@ target_link_libraries(
     android
     OpenSLES
     mediandk
+    aaudio
 )
