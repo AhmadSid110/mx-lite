@@ -6,16 +6,18 @@ import java.io.File
 /**
  * Central playback coordinator.
  *
- * - Native audio = MASTER clock (C++)
- * - Video follows native clock
- * - Silent videos are handled correctly
- * - No ExoPlayer / Media3
+ * RULES (NON-NEGOTIABLE):
+ * - Native C++ audio is the ONLY master clock
+ * - Video MUST NOT start until audio clock ADVANCES
+ * - Java NEVER controls timing
  */
 class PlayerController : PlayerEngine {
 
     private val nativeClock = NativeClock()
     private val video = MediaCodecEngine(clock = nativeClock)
-    private val legacyAudio = AudioCodecEngine()  // For detecting audio tracks only
+
+    // Used ONLY to detect presence of audio track
+    private val legacyAudio = AudioCodecEngine()
 
     private var hasAudio = false
 
@@ -41,22 +43,29 @@ class PlayerController : PlayerEngine {
     override fun play(file: File) {
         release()
 
-        // 🔑 Detect audio track BEFORE starting decoders
+        // 1️⃣ Detect audio track BEFORE starting anything
         hasAudio = legacyAudio.hasAudioTrack(file)
 
         if (hasAudio) {
-            // ✅ Start NATIVE audio FIRST
+            // 2️⃣ Start NATIVE AUDIO FIRST
             NativePlayer.nativePlay(file.absolutePath)
-            
-            // ⏳ Wait until native clock starts (non-zero)
+
+            // 3️⃣ WAIT UNTIL AUDIO CLOCK ACTUALLY ADVANCES
+            var lastClock = 0L
             var retries = 0
-            while (nativeClock.positionMs == 0L && retries < 100) {
+
+            while (retries < 200) { // ~2 seconds max
+                val now = nativeClock.positionMs
+                if (now > lastClock) {
+                    break // 🔑 AUDIO IS RENDERING
+                }
+                lastClock = now
                 Thread.sleep(10)
                 retries++
             }
         }
 
-        // ✅ Start video AFTER native audio is running
+        // 4️⃣ Start VIDEO ONLY AFTER AUDIO CLOCK IS LIVE
         video.play(file)
     }
 
