@@ -1,9 +1,10 @@
 package com.mxlite.app.ui.browser
 
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.content.Intent
 import android.net.Uri
-import android.os.Environment
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,33 +20,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
+import com.mxlite.app.browser.DEFAULT_FOLDER_NAME
+import com.mxlite.app.browser.VideoItem
+import com.mxlite.app.browser.VideoStoreRepository
 import com.mxlite.app.storage.SafFileCopier
 import com.mxlite.app.storage.StorageStore
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 
 /* ───────────────────────────────────────────── */
-/* Video helpers */
+/* Helpers */
 /* ───────────────────────────────────────────── */
 
-private val VIDEO_EXTENSIONS = setOf(
-    "mp4", "mkv", "avi", "webm", "mov", "flv", "wmv", "m4v"
-)
-
-private fun File.isVideo(): Boolean =
-    isFile && extension.lowercase() in VIDEO_EXTENSIONS
-
-private fun File.containsVideoShallowSafe(): Boolean =
-    runCatching {
-        isDirectory && listFiles()?.any { it.isVideo() } == true
-    }.getOrDefault(false)
-
-/* ───────────────────────────────────────────── */
-/* Cache */
-/* ───────────────────────────────────────────── */
-
-private val directoryCache = mutableMapOf<String, List<File>>()
+private fun extractFolderDisplayName(folder: String?): String =
+    folder?.split('/')?.lastOrNull() ?: DEFAULT_FOLDER_NAME
 
 /* ───────────────────────────────────────────── */
 /* UI */
@@ -60,24 +47,25 @@ fun FileBrowserScreen(
     val store = remember { StorageStore(context) }
     val scope = rememberCoroutineScope()
 
-    /* ✅ SAFE ROOT DIRECTORY */
-    val rootDir = remember {
-        Environment.getExternalStorageDirectory()
-    }
-    var currentDir by remember { mutableStateOf(rootDir) }
+    /* ✅ MediaStore videos */
+    var videos by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
+    var currentFolder by remember { mutableStateOf<String?>(null) }
 
+    /* ✅ SAF folders */
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
 
     /* ───────── Back handling ───────── */
-    BackHandler(enabled = currentSafDir != null || currentDir != rootDir) {
+    BackHandler(enabled = currentSafDir != null || currentFolder != null) {
         when {
             currentSafDir != null -> currentSafDir = null
-            currentDir != rootDir -> currentDir = currentDir.parentFile ?: rootDir
+            currentFolder != null -> currentFolder = null
         }
     }
 
+    /* ───────── Load videos once ───────── */
     LaunchedEffect(Unit) {
+        videos = VideoStoreRepository.load(context)
         safFolders = store.getFolders()
     }
 
@@ -94,7 +82,6 @@ fun FileBrowserScreen(
                 scope.launch {
                     store.addFolder(uri)
                     safFolders = store.getFolders()
-                    directoryCache.clear()
                 }
             }
         }
@@ -107,18 +94,17 @@ fun FileBrowserScreen(
                 Text(
                     when {
                         currentSafDir != null -> "Folders"
-                        currentDir != rootDir -> currentDir.name
-                        else -> "Videos"
+                        currentFolder != null -> extractFolderDisplayName(currentFolder)
+                        else -> DEFAULT_FOLDER_NAME
                     }
                 )
             },
             navigationIcon = {
-                if (currentSafDir != null || currentDir != rootDir) {
+                if (currentSafDir != null || currentFolder != null) {
                     IconButton(onClick = {
                         when {
                             currentSafDir != null -> currentSafDir = null
-                            currentDir != rootDir ->
-                                currentDir = currentDir.parentFile ?: rootDir
+                            currentFolder != null -> currentFolder = null
                         }
                     }) {
                         Text("←")
@@ -158,9 +144,12 @@ fun FileBrowserScreen(
                         if (doc.isDirectory) {
                             currentSafDir = doc
                         } else {
-                            onFileSelected(
-                                SafFileCopier.copyToCache(context, doc.uri)
-                            )
+                            scope.launch {
+                                val cachedFile = withContext(Dispatchers.IO) {
+                                    SafFileCopier.copyToCache(context, doc.uri)
+                                }
+                                onFileSelected(cachedFile)
+                            }
                         }
                     }
                 }
@@ -168,59 +157,36 @@ fun FileBrowserScreen(
             return@Column
         }
 
-        /* ───────── Local filesystem (SAFE + CACHED) ───────── */
-
-        var entries by remember { mutableStateOf<List<File>>(emptyList()) }
-        var loading by remember { mutableStateOf(true) }
-
-        LaunchedEffect(currentDir) {
-            val path = currentDir.absolutePath
-
-            directoryCache[path]?.let {
-                entries = it
-                loading = false
-                return@LaunchedEffect
-            }
-
-            loading = true
-
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    currentDir.listFiles()
-                        ?.filter {
-                            it.isVideo() ||
-                                (it.isDirectory && it.containsVideoShallowSafe())
+        /* ───────── Local videos (MediaStore) ───────── */
+        
+        if (currentFolder != null) {
+            /* Show videos in selected folder */
+            val folderVideos = videos.filter { it.folder == currentFolder }
+            
+            LazyColumn {
+                items(folderVideos) { video ->
+                    FolderCard(video.name) {
+                        scope.launch {
+                            val cachedFile = withContext(Dispatchers.IO) {
+                                SafFileCopier.copyToCache(context, video.contentUri)
+                            }
+                            onFileSelected(cachedFile)
                         }
-                        ?.sortedWith(compareBy<File> { !it.isDirectory })
-                        ?: emptyList()
-                }.getOrDefault(emptyList())
+                    }
+                }
             }
-
-            if (result.isNotEmpty()) {
-                directoryCache[path] = result
-            }
-
-            entries = result
-            loading = false
-        }
-
-        if (loading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
-            return@Column
-        }
-
-        LazyColumn {
-            items(entries) { file ->
-                FolderCard(file.name) {
-                    if (file.isDirectory) {
-                        currentDir = file
-                    } else {
-                        onFileSelected(file)
+        } else {
+            /* Show folders that contain videos */
+            val folders = videos
+                .map { it.folder }
+                .distinct()
+                .sorted()
+            
+            LazyColumn {
+                items(folders) { folder ->
+                    val displayName = extractFolderDisplayName(folder)
+                    FolderCard(displayName) {
+                        currentFolder = folder
                     }
                 }
             }
