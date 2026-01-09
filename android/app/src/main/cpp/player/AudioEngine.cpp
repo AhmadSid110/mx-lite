@@ -15,7 +15,8 @@
 /* ───────────────────────────────────────────── */
 
 static inline int16_t floatToPcm16(float v) {
-    v = fmaxf(-1.0f, fminf(1.0f, v));
+    if (v > 1.0f) v = 1.0f;
+    if (v < -1.0f) v = -1.0f;
     return static_cast<int16_t>(v * 32767.0f);
 }
 
@@ -44,9 +45,9 @@ bool AudioEngine::open(const char* path) {
         return false;
 
     int audioTrack = -1;
-    size_t tracks = AMediaExtractor_getTrackCount(extractor_);
+    size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
 
-    for (size_t i = 0; i < tracks; i++) {
+    for (size_t i = 0; i < trackCount; i++) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
         const char* mime = nullptr;
         AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
@@ -160,62 +161,53 @@ void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
     std::vector<int16_t> pcm16;
 
-    bool isFloat = false;
-    bool formatKnown = false;
-
     while (running_) {
 
         /* ---------- INPUT ---------- */
-        ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 10'000);
-        if (in >= 0) {
+        ssize_t inIndex =
+                AMediaCodec_dequeueInputBuffer(codec_, 10'000);
+
+        if (inIndex >= 0) {
             size_t cap;
             uint8_t* buf =
-                    AMediaCodec_getInputBuffer(codec_, in, &cap);
-            ssize_t sz =
+                    AMediaCodec_getInputBuffer(codec_, inIndex, &cap);
+            ssize_t size =
                     AMediaExtractor_readSampleData(extractor_, buf, cap);
 
-            if (sz < 0) {
+            if (size < 0) {
                 AMediaCodec_queueInputBuffer(
-                        codec_, in, 0, 0, 0,
+                        codec_, inIndex, 0, 0, 0,
                         AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
                 );
             } else {
                 int64_t pts =
                         AMediaExtractor_getSampleTime(extractor_);
                 AMediaCodec_queueInputBuffer(
-                        codec_, in, 0, sz, pts, 0);
+                        codec_, inIndex, 0, size, pts, 0);
                 AMediaExtractor_advance(extractor_);
             }
         }
 
         /* ---------- OUTPUT ---------- */
-        ssize_t out =
+        ssize_t outIndex =
                 AMediaCodec_dequeueOutputBuffer(codec_, &info, 10'000);
 
-        if (out >= 0 && info.size > 0) {
-
-            /* 🔑 FINAL FIX: authoritative PCM format detection */
-            if (!formatKnown) {
-                AMediaFormat* outFmt =
-                        AMediaCodec_getOutputFormat(codec_);
-                int32_t encoding = 0;
-                if (outFmt &&
-                    AMediaFormat_getInt32(
-                            outFmt,
-                            AMEDIAFORMAT_KEY_PCM_ENCODING,
-                            &encoding)) {
-                    isFloat = (encoding == 4); // PCM_FLOAT
-                }
-                formatKnown = true;
-            }
+        if (outIndex >= 0 && info.size > 0) {
 
             uint8_t* raw =
-                    AMediaCodec_getOutputBuffer(codec_, out, nullptr);
+                    AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
+
+            /*
+             * SAFE PCM FORMAT DETECTION
+             * - PCM_FLOAT: size divisible by 4 * channels
+             * - PCM_16:    size divisible by 2 * channels
+             */
+            bool isFloat =
+                    (info.size % (sizeof(float) * channelCount_)) == 0;
 
             int frames = 0;
 
             if (isFloat) {
-                /* PCM_FLOAT → PCM_16 */
                 float* f =
                         reinterpret_cast<float*>(raw + info.offset);
                 int samples = info.size / sizeof(float);
@@ -230,11 +222,9 @@ void AudioEngine::decodeLoop() {
                         stream_,
                         pcm16.data(),
                         frames,
-                        -1 /* block */
+                        -1
                 );
-
             } else {
-                /* PCM_16 direct */
                 int16_t* pcm =
                         reinterpret_cast<int16_t*>(raw + info.offset);
 
@@ -244,16 +234,16 @@ void AudioEngine::decodeLoop() {
                         stream_,
                         pcm,
                         frames,
-                        -1 /* block */
+                        -1
                 );
             }
 
-            /* 🔑 MASTER CLOCK ADVANCE (AFTER AUDIO RENDER) */
+            /* MASTER CLOCK — AFTER AUDIO IS WRITTEN */
             int64_t deltaUs =
                     (int64_t)frames * 1'000'000LL / sampleRate_;
             clock_->addUs(deltaUs);
 
-            AMediaCodec_releaseOutputBuffer(codec_, out, false);
+            AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
         }
     }
 }
