@@ -110,6 +110,7 @@ bool AudioEngine::setupAAudio() {
     }
 
     AAudioStream_requestStart(stream_);
+    LOGD("AAudio started: %d Hz, %d ch", sampleRate_, channelCount_);
     return true;
 }
 
@@ -197,15 +198,11 @@ void AudioEngine::decodeLoop() {
             uint8_t* raw =
                     AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
 
-            /*
-             * SAFE PCM FORMAT DETECTION
-             * - PCM_FLOAT: size divisible by 4 * channels
-             * - PCM_16:    size divisible by 2 * channels
-             */
             bool isFloat =
                     (info.size % (sizeof(float) * channelCount_)) == 0;
 
             int frames = 0;
+            aaudio_result_t written = 0;
 
             if (isFloat) {
                 float* f =
@@ -218,11 +215,11 @@ void AudioEngine::decodeLoop() {
 
                 frames = samples / channelCount_;
 
-                AAudioStream_write(
+                written = AAudioStream_write(
                         stream_,
                         pcm16.data(),
                         frames,
-                        -1
+                        1'000'000
                 );
             } else {
                 int16_t* pcm =
@@ -230,18 +227,22 @@ void AudioEngine::decodeLoop() {
 
                 frames = info.size / (2 * channelCount_);
 
-                AAudioStream_write(
+                written = AAudioStream_write(
                         stream_,
                         pcm,
                         frames,
-                        -1
+                        1'000'000
                 );
             }
 
-            /* MASTER CLOCK — AFTER AUDIO IS WRITTEN */
-            int64_t deltaUs =
-                    (int64_t)frames * 1'000'000LL / sampleRate_;
-            clock_->addUs(deltaUs);
+            if (written > 0) {
+                int64_t deltaUs =
+                        (int64_t) written * 1'000'000LL / sampleRate_;
+                clock_->addUs(deltaUs);
+            }
+
+            LOGD("Audio write: requested=%d written=%d",
+                 frames, (int)written);
 
             AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
         }
