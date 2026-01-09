@@ -21,7 +21,7 @@ public:
     void seekUs(int64_t us);
 
 private:
-    // ───────── Core loops ─────────
+    // ───────── Core decode loop ─────────
     void decodeLoop();
 
     // ───────── OpenSL ES ─────────
@@ -39,7 +39,7 @@ private:
     // ───────── Clock ─────────
     Clock* clock_;
 
-    // ───────── MediaCodec / Extractor ─────────
+    // ───────── Media ─────────
     AMediaExtractor* extractor_ = nullptr;
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
@@ -54,15 +54,18 @@ private:
     SLPlayItf player_ = nullptr;
     SLAndroidSimpleBufferQueueItf bufferQueue_ = nullptr;
 
-    // ───────── Playback state ─────────
+    // ───────── Threading / state ─────────
     std::atomic<bool> running_{false};
     std::thread decodeThread_;
 
-    // ───────── Audio format (MANDATORY) ─────────
+    // ───────── Audio format (CRITICAL) ─────────
     int32_t sampleRate_ = 0;        // Hz
     int32_t channelCount_ = 0;      // 1 or 2
-    int32_t bytesPerFrame_ = 0;     // channels * 2 bytes
+    int32_t bytesPerFrame_ = 0;     // channelCount * 2
 
     // ───────── Timing ─────────
-    int64_t lastPtsUs_ = 0;         // decoder PTS (NOT master clock)
+    int64_t lastPtsUs_ = 0;
+
+    // ───────── OpenSL buffer flow control (FIX) ─────────
+    std::atomic<int> buffersAvailable_{0};
 };
