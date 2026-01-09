@@ -8,17 +8,36 @@ class AudioCodecEngine : PlaybackClock {
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
-    private var trackIndex = -1
-
     private var audioTrack: AudioTrack? = null
 
-    private var playing = false
-    @Volatile
-    private var playedSamples = 0L
     private var sampleRate = 44100
+    private var playing = false
 
+    /* ───────── MASTER CLOCK (REAL HARDWARE CLOCK) ───────── */
     override val positionMs: Long
-        get() = (playedSamples * 1000L) / sampleRate
+        get() {
+            val track = audioTrack ?: return 0L
+            return (track.playbackHeadPosition * 1000L) / sampleRate
+        }
+
+    /* ───────── Public API ───────── */
+
+    fun hasAudioTrack(file: File): Boolean {
+        val extractor = MediaExtractor()
+        extractor.setDataSource(file.absolutePath)
+        for (i in 0 until extractor.trackCount) {
+            val mime =
+                extractor.getTrackFormat(i)
+                    .getString(MediaFormat.KEY_MIME)
+                    ?: continue
+            if (mime.startsWith("audio/")) {
+                extractor.release()
+                return true
+            }
+        }
+        extractor.release()
+        return false
+    }
 
     fun play(file: File) {
         release()
@@ -28,7 +47,7 @@ class AudioCodecEngine : PlaybackClock {
             setDataSource(file.absolutePath)
         }
 
-        trackIndex = selectAudioTrack(extractor!!)
+        val trackIndex = selectAudioTrack(extractor!!)
         extractor!!.selectTrack(trackIndex)
 
         val format = extractor!!.getTrackFormat(trackIndex)
@@ -70,9 +89,46 @@ class AudioCodecEngine : PlaybackClock {
         }
     }
 
+    fun pause() {
+        playing = false
+        audioTrack?.pause()
+    }
+
+    fun seekTo(positionMs: Long) {
+        extractor?.seekTo(
+            positionMs * 1000,
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
+        audioTrack?.pause()
+        audioTrack?.flush()
+        audioTrack?.play()
+    }
+
+    fun reset() {
+        audioTrack?.pause()
+        audioTrack?.flush()
+    }
+
+    fun release() {
+        playing = false
+
+        codec?.stop()
+        codec?.release()
+        extractor?.release()
+        audioTrack?.release()
+
+        codec = null
+        extractor = null
+        audioTrack = null
+    }
+
+    /* ───────── Internal ───────── */
+
     private fun decodeLoop() {
         val extractor = extractor ?: return
         val codec = codec ?: return
+        val track = audioTrack ?: return
+
         val info = MediaCodec.BufferInfo()
 
         while (playing) {
@@ -84,13 +140,19 @@ class AudioCodecEngine : PlaybackClock {
 
                 if (size < 0) {
                     codec.queueInputBuffer(
-                        inIndex, 0, 0, 0,
+                        inIndex,
+                        0,
+                        0,
+                        0,
                         MediaCodec.BUFFER_FLAG_END_OF_STREAM
                     )
                 } else {
                     codec.queueInputBuffer(
-                        inIndex, 0, size,
-                        extractor.sampleTime, 0
+                        inIndex,
+                        0,
+                        size,
+                        extractor.sampleTime,
+                        0
                     )
                     extractor.advance()
                 }
@@ -99,22 +161,18 @@ class AudioCodecEngine : PlaybackClock {
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
             if (outIndex >= 0) {
                 val outBuffer = codec.getOutputBuffer(outIndex)!!
-                val chunk = ByteArray(info.size)
-                outBuffer.get(chunk)
+                val data = ByteArray(info.size)
+                outBuffer.get(data)
                 outBuffer.clear()
 
-                audioTrack?.write(chunk, 0, chunk.size)
-
-                // 🔑 CLOCK MASTER UPDATE
-                val bytesPerSample = 2
-                val channels = audioTrack!!.channelCount
-                val samples = info.size / (bytesPerSample * channels)
-                playedSamples += samples
+                track.write(data, 0, data.size)
 
                 codec.releaseOutputBuffer(outIndex, false)
             }
 
-            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                break
+            }
         }
     }
 
@@ -125,33 +183,5 @@ class AudioCodecEngine : PlaybackClock {
             if (mime.startsWith("audio/")) return i
         }
         error("No audio track found")
-    }
-
-    fun pause() {
-        playing = false
-    }
-
-    fun seekTo(positionMs: Long) {
-        extractor?.seekTo(
-            positionMs * 1000,
-            MediaExtractor.SEEK_TO_CLOSEST_SYNC
-        )
-        playedSamples = (positionMs * sampleRate) / 1000
-    }
-
-    fun reset() {
-        playedSamples = 0
-    }
-
-    fun release() {
-        playing = false
-        codec?.stop()
-        codec?.release()
-        extractor?.release()
-        audioTrack?.release()
-
-        codec = null
-        extractor = null
-        audioTrack = null
     }
 }
