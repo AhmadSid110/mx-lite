@@ -24,9 +24,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 🔴 Request permission FIRST
-        requestMediaPermission()
-
         setContent {
             if (permissionGranted) {
                 AppRoot()
@@ -34,19 +31,17 @@ class MainActivity : ComponentActivity() {
                 PermissionWaitingScreen()
             }
         }
+
+        permissionLauncher.launch(requiredPermissions())
     }
 
-    private fun requestMediaPermission() {
-        val permissions =
-            if (Build.VERSION.SDK_INT >= 33) {
-                arrayOf(
-                    Manifest.permission.READ_MEDIA_VIDEO,
-                    Manifest.permission.READ_MEDIA_AUDIO
-                )
-            } else {
-                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-
-        permissionLauncher.launch(permissions)
-    }
+    private fun requiredPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= 33) {
+            arrayOf(
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_AUDIO
+            )
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
 }
