@@ -52,12 +52,6 @@ bool AudioEngine::open(const char* path) {
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sampleRate_);
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &channelCount_);
 
-    // Detect PCM encoding
-    pcmEncoding_ = AMEDIAFORMAT_PCM_ENCODING_PCM_16BIT;
-    AMediaFormat_getInt32(
-        format_, AMEDIAFORMAT_KEY_PCM_ENCODING, &pcmEncoding_
-    );
-
     const char* mime = nullptr;
     AMediaFormat_getString(format_, AMEDIAFORMAT_KEY_MIME, &mime);
     codec_ = AMediaCodec_createDecoderByType(mime);
@@ -161,6 +155,7 @@ void AudioEngine::decodeLoop() {
 
         ssize_t out = AMediaCodec_dequeueOutputBuffer(codec_, &info, 10000);
         if (out >= 0 && info.size > 0) {
+
             while (buffersAvailable_ == 0 && running_)
                 usleep(1000);
 
@@ -169,34 +164,26 @@ void AudioEngine::decodeLoop() {
             size_t cap;
             uint8_t* buf = AMediaCodec_getOutputBuffer(codec_, out, &cap);
 
-            int frames;
-            if (pcmEncoding_ == AMEDIAFORMAT_PCM_ENCODING_PCM_FLOAT) {
-                int samples = info.size / sizeof(float);
-                pcm16.resize(samples);
-                float* f = (float*)(buf + info.offset);
-                for (int i = 0; i < samples; i++) {
-                    float v = std::max(-1.0f, std::min(1.0f, f[i]));
-                    pcm16[i] = (int16_t)(v * 32767.0f);
-                }
-                (*bufferQueue_)->Enqueue(
-                    bufferQueue_,
-                    pcm16.data(),
-                    pcm16.size() * sizeof(int16_t)
-                );
-                frames = samples / channelCount_;
-            } else {
-                (*bufferQueue_)->Enqueue(
-                    bufferQueue_,
-                    buf + info.offset,
-                    info.size
-                );
-                frames = info.size / (2 * channelCount_);
+            int samples = info.size / sizeof(float);
+            pcm16.resize(samples);
+
+            float* f = (float*)(buf + info.offset);
+            for (int i = 0; i < samples; i++) {
+                float v = std::max(-1.0f, std::min(1.0f, f[i]));
+                pcm16[i] = (int16_t)(v * 32767.0f);
             }
 
+            (*bufferQueue_)->Enqueue(
+                bufferQueue_,
+                pcm16.data(),
+                pcm16.size() * sizeof(int16_t)
+            );
+
+            int frames = samples / channelCount_;
             int64_t deltaUs =
                 (int64_t)frames * 1000000LL / sampleRate_;
-            clock_->setUs(clock_->getUs() + deltaUs);
 
+            clock_->setUs(clock_->getUs() + deltaUs);
             AMediaCodec_releaseOutputBuffer(codec_, out, false);
         }
     }
