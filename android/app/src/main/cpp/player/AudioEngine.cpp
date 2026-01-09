@@ -7,9 +7,6 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-static constexpr int PCM_BUFFER_COUNT = 2;
-static constexpr int PCM_BUFFER_SIZE  = 8192;
-
 /* ───────────────────────────── */
 /* Helpers */
 /* ───────────────────────────── */
@@ -107,7 +104,7 @@ bool AudioEngine::setupOpenSL() {
     (*outputMix_)->Realize(outputMix_, SL_BOOLEAN_FALSE);
 
     SLDataLocator_AndroidSimpleBufferQueue locBufQ = {
-        SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, PCM_BUFFER_COUNT
+        SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 2
     };
 
     SLDataFormat_PCM pcm = {
@@ -141,8 +138,7 @@ bool AudioEngine::setupOpenSL() {
         bufferQueue_, bufferQueueCallback, this
     );
 
-    buffersAvailable_ = PCM_BUFFER_COUNT;
-
+    buffersAvailable_ = 2;
     return true;
 }
 
@@ -169,14 +165,37 @@ void AudioEngine::stop() {
 }
 
 /* ───────────────────────────── */
+/* Seek */
+/* ───────────────────────────── */
+
+void AudioEngine::seekUs(long us) {
+    if (!extractor_ || !codec_) return;
+
+    running_ = false;
+    if (decodeThread_.joinable())
+        decodeThread_.join();
+
+    AMediaExtractor_seekTo(
+        extractor_,
+        us,
+        AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC
+    );
+
+    AMediaCodec_flush(codec_);
+
+    clock_->setUs(us);
+
+    buffersAvailable_ = 2;
+    running_ = true;
+    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
+}
+
+/* ───────────────────────────── */
 /* Decode loop */
 /* ───────────────────────────── */
 
 void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
-
-    static uint8_t pcmBuffers[PCM_BUFFER_COUNT][PCM_BUFFER_SIZE];
-    int bufferIndex = 0;
 
     while (running_) {
 
@@ -207,22 +226,19 @@ void AudioEngine::decodeLoop() {
             buffersAvailable_--;
 
             size_t cap;
-            uint8_t* src = AMediaCodec_getOutputBuffer(codec_, out, &cap);
-
-            size_t copySize = std::min((size_t)info.size, (size_t)PCM_BUFFER_SIZE);
-            memcpy(pcmBuffers[bufferIndex], src + info.offset, copySize);
-
+            uint8_t* buf = AMediaCodec_getOutputBuffer(codec_, out, &cap);
             (*bufferQueue_)->Enqueue(
                 bufferQueue_,
-                pcmBuffers[bufferIndex],
-                copySize
+                buf + info.offset,
+                info.size
             );
 
-            int frames = copySize / (2 * channelCount_);
-            int64_t deltaUs = (int64_t)frames * 1000000LL / sampleRate_;
-            clock_->addUs(deltaUs);
+            // 🔑 MASTER CLOCK UPDATE (audio-render based)
+            int frames = info.size / (2 * channelCount_);
+            int64_t deltaUs =
+                (int64_t)frames * 1000000LL / sampleRate_;
 
-            bufferIndex = (bufferIndex + 1) % PCM_BUFFER_COUNT;
+            clock_->addUs(deltaUs);
 
             AMediaCodec_releaseOutputBuffer(codec_, out, false);
         }
