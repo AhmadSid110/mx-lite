@@ -24,6 +24,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 🔴 Request permission FIRST
+        requestMediaPermission()
+
         setContent {
             if (permissionGranted) {
                 AppRoot()
@@ -31,8 +34,6 @@ class MainActivity : ComponentActivity() {
                 PermissionWaitingScreen()
             }
         }
-
-        requestMediaPermission()
     }
 
     private fun requestMediaPermission() {
