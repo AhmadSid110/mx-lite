@@ -20,12 +20,13 @@ import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.storage.SafFileCopier
 import com.mxlite.app.storage.StorageStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 /* ───────────────────────────────────────────── */
-/* Video detection helpers */
+/* Video helpers */
 /* ───────────────────────────────────────────── */
 
 private val VIDEO_EXTENSIONS = setOf(
@@ -35,14 +36,13 @@ private val VIDEO_EXTENSIONS = setOf(
 private fun File.isVideo(): Boolean =
     isFile && extension.lowercase() in VIDEO_EXTENSIONS
 
-/** FAST check — no recursion */
 private fun File.containsVideoShallow(): Boolean {
     if (!isDirectory) return false
     return listFiles()?.any { it.isVideo() } == true
 }
 
 /* ───────────────────────────────────────────── */
-/* Directory cache (CRITICAL for performance) */
+/* Cache */
 /* ───────────────────────────────────────────── */
 
 private val directoryCache = mutableMapOf<String, List<File>>()
@@ -60,17 +60,32 @@ fun FileBrowserScreen(
     val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
 
-    val rootDir = remember { File("/storage/emulated/0") }
-    var currentDir by remember { mutableStateOf(rootDir) }
+    /* 🔴 DELAY ROOT BINDING (CRITICAL) */
+    var rootDir by remember { mutableStateOf<File?>(null) }
+    var currentDir by remember { mutableStateOf<File?>(null) }
+
+    LaunchedEffect(Unit) {
+        delay(300)
+        val dir = File("/storage/emulated/0")
+        rootDir = dir
+        currentDir = dir
+    }
+
+    if (rootDir == null || currentDir == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
 
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
 
     /* ───────── Back handling ───────── */
-    BackHandler(enabled = currentDir != rootDir || currentSafDir != null) {
+    BackHandler(enabled = currentSafDir != null || currentDir != rootDir) {
         when {
             currentSafDir != null -> currentSafDir = null
-            currentDir != rootDir -> currentDir = currentDir.parentFile ?: rootDir
+            currentDir != rootDir -> currentDir = currentDir!!.parentFile ?: rootDir
         }
     }
 
@@ -91,31 +106,30 @@ fun FileBrowserScreen(
                 scope.launch {
                     store.addFolder(uri)
                     safFolders = store.getFolders()
-                    directoryCache.clear() // 🔥 invalidate cache
+                    directoryCache.clear()
                 }
             }
         }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize()) {
 
-        /* ───────── Top bar ───────── */
         TopAppBar(
             title = {
                 Text(
                     when {
                         currentSafDir != null -> "Folders"
-                        currentDir != rootDir -> currentDir.name
+                        currentDir != rootDir -> currentDir!!.name
                         else -> "Videos"
                     }
                 )
             },
             navigationIcon = {
-                if (currentDir != rootDir || currentSafDir != null) {
+                if (currentSafDir != null || currentDir != rootDir) {
                     IconButton(onClick = {
                         when {
                             currentSafDir != null -> currentSafDir = null
                             currentDir != rootDir ->
-                                currentDir = currentDir.parentFile ?: rootDir
+                                currentDir = currentDir!!.parentFile ?: rootDir
                         }
                     }) {
                         Text("←")
@@ -129,28 +143,12 @@ fun FileBrowserScreen(
             }
         )
 
-        /* ───────── SAF root folders ───────── */
+        /* ───────── SAF root ───────── */
         if (currentSafDir == null && safFolders.isNotEmpty()) {
             LazyColumn {
                 items(safFolders) { uri ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp)
-                            .clickable {
-                                currentSafDir =
-                                    DocumentFile.fromTreeUri(context, uri)
-                            },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("📁", style = MaterialTheme.typography.headlineSmall)
-                            Spacer(Modifier.width(12.dp))
-                            Text(uri.lastPathSegment ?: "Folder")
-                        }
+                    FolderCard(uri.lastPathSegment ?: "Folder") {
+                        currentSafDir = DocumentFile.fromTreeUri(context, uri)
                     }
                 }
             }
@@ -166,34 +164,13 @@ fun FileBrowserScreen(
 
             LazyColumn {
                 items(children) { doc ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                            .clickable {
-                                if (doc.isDirectory) {
-                                    currentSafDir = doc
-                                } else {
-                                    val file =
-                                        SafFileCopier.copyToCache(
-                                            context,
-                                            doc.uri
-                                        )
-                                    onFileSelected(file)
-                                }
-                            },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                if (doc.isDirectory) "📁" else "▶",
-                                style = MaterialTheme.typography.headlineSmall
+                    FolderCard(doc.name ?: "") {
+                        if (doc.isDirectory) {
+                            currentSafDir = doc
+                        } else {
+                            onFileSelected(
+                                SafFileCopier.copyToCache(context, doc.uri)
                             )
-                            Spacer(Modifier.width(12.dp))
-                            Text(doc.name ?: "")
                         }
                     }
                 }
@@ -201,14 +178,13 @@ fun FileBrowserScreen(
             return@Column
         }
 
-        /* ───────── Local filesystem browsing (CACHED + IO thread) ───────── */
+        /* ───────── Local filesystem (cached) ───────── */
 
         var entries by remember { mutableStateOf<List<File>>(emptyList()) }
         var loading by remember { mutableStateOf(true) }
 
         LaunchedEffect(currentDir) {
-            val path = currentDir.absolutePath
-
+            val path = currentDir!!.absolutePath
             directoryCache[path]?.let {
                 entries = it
                 loading = false
@@ -216,9 +192,8 @@ fun FileBrowserScreen(
             }
 
             loading = true
-
             val result = withContext(Dispatchers.IO) {
-                currentDir.listFiles()
+                currentDir!!.listFiles()
                     ?.filter {
                         it.isVideo() ||
                             (it.isDirectory && it.containsVideoShallow())
@@ -233,10 +208,7 @@ fun FileBrowserScreen(
         }
 
         if (loading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             return@Column
@@ -244,36 +216,34 @@ fun FileBrowserScreen(
 
         LazyColumn {
             items(entries) { file ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                        .clickable {
-                            if (file.isDirectory) {
-                                currentDir = file
-                            } else {
-                                onFileSelected(file)
-                            }
-                        },
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            if (file.isDirectory) "📁" else "▶",
-                            style = MaterialTheme.typography.headlineSmall
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            file.name,
-                            maxLines = 1,
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
+                FolderCard(file.name) {
+                    if (file.isDirectory) currentDir = file
+                    else onFileSelected(file)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FolderCard(
+    title: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("📁", style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.width(12.dp))
+            Text(title, maxLines = 1)
         }
     }
 }
