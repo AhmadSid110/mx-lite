@@ -1,10 +1,12 @@
 package com.mxlite.app.browser
 
+import android.content.ContentUris
 import android.content.Context
+import android.net.Uri
 import android.provider.MediaStore
 
 data class VideoItem(
-    val contentUri: String,
+    val contentUri: Uri,
     val name: String,
     val folder: String
 )
@@ -38,7 +40,10 @@ object VideoStoreRepository {
 
                 items.add(
                     VideoItem(
-                        contentUri = "${MediaStore.Video.Media.EXTERNAL_CONTENT_URI}/$id",
+                        contentUri = ContentUris.withAppendedId(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            id
+                        ),
                         name = name,
                         folder = folder
                     )

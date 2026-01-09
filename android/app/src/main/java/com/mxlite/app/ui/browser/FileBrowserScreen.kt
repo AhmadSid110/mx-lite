@@ -153,7 +153,9 @@ fun FileBrowserScreen(
             LazyColumn {
                 items(folderVideos) { video ->
                     FolderCard(video.name) {
-                        onFileSelected(File(video.contentUri))
+                        onFileSelected(
+                            SafFileCopier.copyToCache(context, video.contentUri)
+                        )
                     }
                 }
             }
