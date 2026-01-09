@@ -2,11 +2,10 @@ name: MX Lite Android Build
 
 on:
   workflow_dispatch:
+
   push:
-    tags:
-      - "v*.*.*"
     branches:
-      - "**"
+      - main
 
 permissions:
   contents: write
@@ -33,11 +32,7 @@ jobs:
       # ─────────────────────────────────────────────
       - name: Resolve version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION="dev-${GITHUB_RUN_NUMBER}"
-          fi
+          VERSION="dev-${GITHUB_RUN_NUMBER}"
           echo "APP_VERSION=$VERSION" >> $GITHUB_ENV
           echo "Using version: $VERSION"
 
@@ -51,7 +46,7 @@ jobs:
           java-version: 17
 
       # ─────────────────────────────────────────────
-      # 4️⃣ ANDROID SDK (FIXED LAYOUT)
+      # 4️⃣ ANDROID SDK
       # ─────────────────────────────────────────────
       - name: Install Android SDK
         run: |
@@ -127,7 +122,7 @@ jobs:
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.APP_VERSION }}
-          name: MX Lite v${{ env.APP_VERSION }}
+          tag_name: dev-${{ env.APP_VERSION }}
+          name: MX Lite ${{ env.APP_VERSION }}
           prerelease: true
           files: android/app/build/outputs/apk/debug/mxlite.apk
