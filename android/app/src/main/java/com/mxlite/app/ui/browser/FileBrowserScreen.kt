@@ -20,7 +20,6 @@ import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.storage.SafFileCopier
 import com.mxlite.app.storage.StorageStore
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -36,14 +35,14 @@ private val VIDEO_EXTENSIONS = setOf(
 private fun File.isVideo(): Boolean =
     isFile && extension.lowercase() in VIDEO_EXTENSIONS
 
-/** FAST — no recursion */
+/** FAST check — no recursion */
 private fun File.containsVideoShallow(): Boolean {
     if (!isDirectory) return false
     return listFiles()?.any { it.isVideo() } == true
 }
 
 /* ───────────────────────────────────────────── */
-/* Cache */
+/* Simple in-memory cache */
 /* ───────────────────────────────────────────── */
 
 private val directoryCache = mutableMapOf<String, List<File>>()
@@ -61,41 +60,18 @@ fun FileBrowserScreen(
     val scope = rememberCoroutineScope()
     val store = remember { StorageStore(context) }
 
-    /* 🔴 DELAY ROOT DIRECTORY BINDING */
-    var rootDir by remember { mutableStateOf<File?>(null) }
-    var currentDir by remember { mutableStateOf<File?>(null) }
-
-    LaunchedEffect(Unit) {
-        delay(300) // allow permission + storage settle
-        val dir = File("/storage/emulated/0")
-        rootDir = dir
-        currentDir = dir
-    }
-
-    /* 🔴 GUARD — prevents crash */
-    if (rootDir == null || currentDir == null) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            CircularProgressIndicator()
-        }
-        return
-    }
-
-    val safeRoot = rootDir!!
-    val safeDir = currentDir!!
+    // ✅ Stable, NON-null root directory
+    val rootDir = remember { File("/storage/emulated/0") }
+    var currentDir by remember { mutableStateOf(rootDir) }
 
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var currentSafDir by remember { mutableStateOf<DocumentFile?>(null) }
 
     /* ───────── Back handling ───────── */
-    BackHandler(
-        enabled = currentSafDir != null || safeDir != safeRoot
-    ) {
+    BackHandler(enabled = currentSafDir != null || currentDir != rootDir) {
         when {
             currentSafDir != null -> currentSafDir = null
-            safeDir != safeRoot -> currentDir = safeDir.parentFile ?: safeRoot
+            currentDir != rootDir -> currentDir = currentDir.parentFile ?: rootDir
         }
     }
 
@@ -103,7 +79,7 @@ fun FileBrowserScreen(
         safFolders = store.getFolders()
     }
 
-    /* ───────── SAF picker ───────── */
+    /* ───────── SAF folder picker ───────── */
     val folderPicker =
         rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocumentTree()
@@ -116,7 +92,7 @@ fun FileBrowserScreen(
                 scope.launch {
                     store.addFolder(uri)
                     safFolders = store.getFolders()
-                    directoryCache.clear()
+                    directoryCache.clear() // invalidate cache
                 }
             }
         }
@@ -129,18 +105,18 @@ fun FileBrowserScreen(
                 Text(
                     when {
                         currentSafDir != null -> "Folders"
-                        safeDir != safeRoot -> safeDir.name
+                        currentDir != rootDir -> currentDir.name
                         else -> "Videos"
                     }
                 )
             },
             navigationIcon = {
-                if (currentSafDir != null || safeDir != safeRoot) {
+                if (currentSafDir != null || currentDir != rootDir) {
                     IconButton(onClick = {
                         when {
                             currentSafDir != null -> currentSafDir = null
-                            safeDir != safeRoot ->
-                                currentDir = safeDir.parentFile ?: safeRoot
+                            currentDir != rootDir ->
+                                currentDir = currentDir.parentFile ?: rootDir
                         }
                     }) {
                         Text("←")
@@ -170,8 +146,7 @@ fun FileBrowserScreen(
         /* ───────── SAF browsing ───────── */
         if (currentSafDir != null) {
             val children = remember(currentSafDir) {
-                currentSafDir!!
-                    .listFiles()
+                currentSafDir!!.listFiles()
                     .sortedWith(compareBy<DocumentFile> { !it.isDirectory })
             }
 
@@ -196,8 +171,8 @@ fun FileBrowserScreen(
         var entries by remember { mutableStateOf<List<File>>(emptyList()) }
         var loading by remember { mutableStateOf(true) }
 
-        LaunchedEffect(safeDir) {
-            val path = safeDir.absolutePath
+        LaunchedEffect(currentDir) {
+            val path = currentDir.absolutePath
 
             directoryCache[path]?.let {
                 entries = it
@@ -206,23 +181,17 @@ fun FileBrowserScreen(
             }
 
             loading = true
-
             val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    safeDir.listFiles()
-                        ?.filter {
-                            it.isVideo() ||
-                                (it.isDirectory && it.containsVideoShallow())
-                        }
-                        ?.sortedWith(compareBy<File> { !it.isDirectory })
-                        ?: emptyList()
-                }.getOrElse { emptyList() }
+                currentDir.listFiles()
+                    ?.filter {
+                        it.isVideo() ||
+                            (it.isDirectory && it.containsVideoShallow())
+                    }
+                    ?.sortedWith(compareBy<File> { !it.isDirectory })
+                    ?: emptyList()
             }
 
-            if (result.isNotEmpty()) {
-                directoryCache[path] = result
-            }
-
+            directoryCache[path] = result
             entries = result
             loading = false
         }
@@ -240,8 +209,11 @@ fun FileBrowserScreen(
         LazyColumn {
             items(entries) { file ->
                 FolderCard(file.name) {
-                    if (file.isDirectory) currentDir = file
-                    else onFileSelected(file)
+                    if (file.isDirectory) {
+                        currentDir = file
+                    } else {
+                        onFileSelected(file)
+                    }
                 }
             }
         }
