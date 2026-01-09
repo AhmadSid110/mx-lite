@@ -91,10 +91,8 @@ bool AudioEngine::setupAAudio() {
     AAudio_createStreamBuilder(&builder);
 
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setPerformanceMode(
-            builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    AAudioStreamBuilder_setSharingMode(
-            builder, AAUDIO_SHARING_MODE_SHARED);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
     AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
     AAudioStreamBuilder_setChannelCount(builder, channelCount_);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
@@ -104,12 +102,19 @@ bool AudioEngine::setupAAudio() {
     AAudioStreamBuilder_delete(builder);
 
     if (res != AAUDIO_OK) {
-        LOGE("AAudio open failed: %s",
-             AAudio_convertResultToText(res));
+        LOGE("AAudio open failed: %s", AAudio_convertResultToText(res));
         return false;
     }
 
     AAudioStream_requestStart(stream_);
+
+    /* 🔑 WAIT UNTIL STREAM IS ACTUALLY STARTED (Xiaomi FIX) */
+    AAudioStreamState state;
+    do {
+        state = AAudioStream_getState(stream_);
+    } while (state != AAUDIO_STREAM_STATE_STARTED);
+
+    LOGD("AAudio stream started");
     return true;
 }
 
@@ -140,12 +145,7 @@ void AudioEngine::seekUs(int64_t us) {
     if (decodeThread_.joinable())
         decodeThread_.join();
 
-    AMediaExtractor_seekTo(
-            extractor_,
-            us,
-            AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC
-    );
-
+    AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
     AMediaCodec_flush(codec_);
     clock_->setUs(us);
 
@@ -163,16 +163,11 @@ void AudioEngine::decodeLoop() {
 
     while (running_) {
 
-        /* ---------- INPUT ---------- */
-        ssize_t inIndex =
-                AMediaCodec_dequeueInputBuffer(codec_, 10'000);
-
+        ssize_t inIndex = AMediaCodec_dequeueInputBuffer(codec_, 10'000);
         if (inIndex >= 0) {
             size_t cap;
-            uint8_t* buf =
-                    AMediaCodec_getInputBuffer(codec_, inIndex, &cap);
-            ssize_t size =
-                    AMediaExtractor_readSampleData(extractor_, buf, cap);
+            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, inIndex, &cap);
+            ssize_t size = AMediaExtractor_readSampleData(extractor_, buf, cap);
 
             if (size < 0) {
                 AMediaCodec_queueInputBuffer(
@@ -180,70 +175,47 @@ void AudioEngine::decodeLoop() {
                         AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
                 );
             } else {
-                int64_t pts =
-                        AMediaExtractor_getSampleTime(extractor_);
                 AMediaCodec_queueInputBuffer(
-                        codec_, inIndex, 0, size, pts, 0);
+                        codec_, inIndex, 0, size,
+                        AMediaExtractor_getSampleTime(extractor_), 0
+                );
                 AMediaExtractor_advance(extractor_);
             }
         }
 
-        /* ---------- OUTPUT ---------- */
-        ssize_t outIndex =
-                AMediaCodec_dequeueOutputBuffer(codec_, &info, 10'000);
-
+        ssize_t outIndex = AMediaCodec_dequeueOutputBuffer(codec_, &info, 10'000);
         if (outIndex < 0 || info.size <= 0)
             continue;
 
-        uint8_t* raw =
-                AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
+        uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
 
-        /*
-         * FINAL, SAFE FORMAT HANDLING
-         * - AAC decoders output either:
-         *   PCM_16  → frames = size / (2 * channels)
-         *   PCM_FLOAT → frames = size / (4 * channels)
-         * - We DO NOT use MediaFormat keys (API 28 issue)
-         */
+        bool isFloat =
+                (info.size % (sizeof(float) * channelCount_)) == 0;
 
-        int frames = 0;
+        int samples = info.size / (isFloat ? sizeof(float) : sizeof(int16_t));
+        int frames = samples / channelCount_;
 
-        if (info.size % (sizeof(float) * channelCount_) == 0) {
-            /* PCM_FLOAT */
+        aaudio_result_t writeResult;
+
+        if (isFloat) {
             float* f = reinterpret_cast<float*>(raw + info.offset);
-            int samples = info.size / sizeof(float);
-
             pcm16.resize(samples);
             for (int i = 0; i < samples; i++)
                 pcm16[i] = floatToPcm16(f[i]);
 
-            frames = samples / channelCount_;
-
-            AAudioStream_write(
-                    stream_,
-                    pcm16.data(),
-                    frames,
-                    -1 /* block */
-            );
+            writeResult = AAudioStream_write(stream_, pcm16.data(), frames, -1);
         } else {
-            /* PCM_16 */
-            int16_t* pcm =
-                    reinterpret_cast<int16_t*>(raw + info.offset);
-
-            frames = info.size / (2 * channelCount_);
-
-            AAudioStream_write(
-                    stream_,
-                    pcm,
-                    frames,
-                    -1 /* block */
-            );
+            int16_t* pcm = reinterpret_cast<int16_t*>(raw + info.offset);
+            writeResult = AAudioStream_write(stream_, pcm, frames, -1);
         }
 
-        /* 🔑 MASTER CLOCK — ONLY AFTER AUDIO IS WRITTEN */
-        const int64_t deltaUs =
-                (int64_t)frames * 1'000'000LL / sampleRate_;
-        clock_->addUs(deltaUs);
+        if (writeResult > 0) {
+            int64_t deltaUs =
+                    (int64_t)frames * 1'000'000LL / sampleRate_;
+            clock_->addUs(deltaUs);
+        } else {
+            LOGE("AAudio write failed: %d", writeResult);
+        }
 
         AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
     }
