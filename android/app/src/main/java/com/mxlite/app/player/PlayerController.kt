@@ -6,15 +6,16 @@ import java.io.File
 /**
  * Central playback coordinator.
  *
- * - Audio = MASTER clock
- * - Video follows audio
+ * - Native audio = MASTER clock (C++)
+ * - Video follows native clock
  * - Silent videos are handled correctly
  * - No ExoPlayer / Media3
  */
 class PlayerController : PlayerEngine {
 
-    private val audio = AudioCodecEngine()
-    private val video = MediaCodecEngine(clock = audio)
+    private val nativeClock = NativeClock()
+    private val video = MediaCodecEngine(clock = nativeClock)
+    private val legacyAudio = AudioCodecEngine()  // For detecting audio tracks only
 
     private var hasAudio = false
 
@@ -27,7 +28,7 @@ class PlayerController : PlayerEngine {
 
     override val currentPositionMs: Long
         get() =
-            if (hasAudio) audio.positionMs
+            if (hasAudio) nativeClock.positionMs
             else video.currentPositionMs
 
     override val isPlaying: Boolean
@@ -41,30 +42,43 @@ class PlayerController : PlayerEngine {
         release()
 
         // 🔑 Detect audio track BEFORE starting decoders
-        hasAudio = audio.hasAudioTrack(file)
+        hasAudio = legacyAudio.hasAudioTrack(file)
 
         if (hasAudio) {
-            audio.reset()
-            audio.play(file)
+            // ✅ Start NATIVE audio FIRST
+            NativePlayer.nativePlay(file.absolutePath)
+            
+            // ⏳ Wait until native clock starts (non-zero)
+            var retries = 0
+            while (nativeClock.positionMs == 0L && retries < 100) {
+                Thread.sleep(10)
+                retries++
+            }
         }
 
+        // ✅ Start video AFTER native audio is running
         video.play(file)
     }
 
     override fun pause() {
-        audio.pause()
+        if (hasAudio) {
+            NativePlayer.nativeStop()
+        }
         video.pause()
     }
 
     override fun seekTo(positionMs: Long) {
         if (hasAudio) {
-            audio.seekTo(positionMs)
+            NativePlayer.nativeSeek(positionMs * 1000)
         }
         video.seekTo(positionMs)
     }
 
     override fun release() {
-        audio.release()
+        if (hasAudio) {
+            NativePlayer.nativeRelease()
+        }
+        legacyAudio.release()
         video.release()
         hasAudio = false
     }
