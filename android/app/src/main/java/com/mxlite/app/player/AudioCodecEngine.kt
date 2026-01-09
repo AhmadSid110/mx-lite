@@ -3,6 +3,7 @@ package com.mxlite.app.player
 import android.media.*
 import java.io.File
 import kotlin.concurrent.thread
+import kotlin.math.max
 
 class AudioCodecEngine : PlaybackClock {
 
@@ -13,35 +14,36 @@ class AudioCodecEngine : PlaybackClock {
     private var sampleRate = 44100
     private var playing = false
 
-    /* ───────── MASTER CLOCK (REAL HARDWARE CLOCK) ───────── */
+    // 🔑 MASTER CLOCK (PTS-BASED — CORRECT)
+    @Volatile
+    private var lastPtsUs: Long = 0L
+
     override val positionMs: Long
-        get() {
-            val track = audioTrack ?: return 0L
-            return (track.playbackHeadPosition * 1000L) / sampleRate
-        }
+        get() = lastPtsUs / 1000
 
     /* ───────── Public API ───────── */
 
     fun hasAudioTrack(file: File): Boolean {
-        val extractor = MediaExtractor()
-        extractor.setDataSource(file.absolutePath)
-        for (i in 0 until extractor.trackCount) {
+        val ex = MediaExtractor()
+        ex.setDataSource(file.absolutePath)
+        for (i in 0 until ex.trackCount) {
             val mime =
-                extractor.getTrackFormat(i)
+                ex.getTrackFormat(i)
                     .getString(MediaFormat.KEY_MIME)
                     ?: continue
             if (mime.startsWith("audio/")) {
-                extractor.release()
+                ex.release()
                 return true
             }
         }
-        extractor.release()
+        ex.release()
         return false
     }
 
     fun play(file: File) {
         release()
         playing = true
+        lastPtsUs = 0L
 
         extractor = MediaExtractor().apply {
             setDataSource(file.absolutePath)
@@ -68,12 +70,15 @@ class AudioCodecEngine : PlaybackClock {
             AudioFormat.ENCODING_PCM_16BIT
         )
 
+        // 🔴 CRITICAL: large buffer to avoid underruns
+        val bufferSize = max(minBuffer * 4, 262144)
+
         audioTrack = AudioTrack(
             AudioManager.STREAM_MUSIC,
             sampleRate,
             channelConfig,
             AudioFormat.ENCODING_PCM_16BIT,
-            minBuffer,
+            bufferSize,
             AudioTrack.MODE_STREAM
         ).apply {
             play()
@@ -99,12 +104,16 @@ class AudioCodecEngine : PlaybackClock {
             positionMs * 1000,
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
+
+        lastPtsUs = positionMs * 1000
+
         audioTrack?.pause()
         audioTrack?.flush()
         audioTrack?.play()
     }
 
     fun reset() {
+        lastPtsUs = 0L
         audioTrack?.pause()
         audioTrack?.flush()
     }
@@ -120,9 +129,10 @@ class AudioCodecEngine : PlaybackClock {
         codec = null
         extractor = null
         audioTrack = null
+        lastPtsUs = 0L
     }
 
-    /* ───────── Internal ───────── */
+    /* ───────── Decode Loop ───────── */
 
     private fun decodeLoop() {
         val extractor = extractor ?: return
@@ -166,6 +176,11 @@ class AudioCodecEngine : PlaybackClock {
                 outBuffer.clear()
 
                 track.write(data, 0, data.size)
+
+                // 🔑 UPDATE MASTER CLOCK FROM PTS
+                if (info.presentationTimeUs > 0) {
+                    lastPtsUs = info.presentationTimeUs
+                }
 
                 codec.releaseOutputBuffer(outIndex, false)
             }
