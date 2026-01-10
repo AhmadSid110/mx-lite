@@ -64,6 +64,7 @@ private:
 
     /* Threads */
     std::atomic<bool> running_{false};
+    std::atomic<bool> needsRestart_{false};
     std::thread decodeThread_;
 
     /* Ring buffer */
