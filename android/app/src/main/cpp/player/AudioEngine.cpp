@@ -136,11 +136,13 @@ int AudioEngine::readPcm(int16_t* out, int frames) {
     }
     
     int framesToRead = std::min<int64_t>(frames, available);
-    int samples = framesToRead * channelCount_;
     
-    for (int i = 0; i < samples; ++i) {
-        int64_t idx = (read * channelCount_ + i) % ring_.size();
-        out[i] = ring_[idx];
+    for (int f = 0; f < framesToRead; ++f) {
+        for (int ch = 0; ch < channelCount_; ++ch) {
+            int64_t readIdx = ((read + f) * channelCount_ + ch) % ring_.size();
+            int outIdx = f * channelCount_ + ch;
+            out[outIdx] = ring_[readIdx];
+        }
     }
     
     readPos_.store(read + framesToRead);

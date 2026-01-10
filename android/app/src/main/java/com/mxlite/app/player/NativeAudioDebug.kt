@@ -54,7 +54,8 @@ class NativeAudioDebug {
                         clockPositionMs = NativePlayer.nativeGetClockUs() / 1000
                     )
                 } catch (e: Exception) {
-                    // Ignore JNI errors during polling
+                    // JNI errors (e.g. native not initialized) - keep previous state
+                    // All native atomics have safe default values (false/0)
                 }
                 
                 delay(250)
