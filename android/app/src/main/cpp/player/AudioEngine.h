@@ -3,8 +3,6 @@
 #include <media/NdkMediaExtractor.h>
 #include <media/NdkMediaCodec.h>
 #include <aaudio/AAudio.h>
-
-#include <thread>
 #include <atomic>
 #include <cstdint>
 
@@ -18,38 +16,35 @@ public:
     bool open(const char* path);
     void start();
     void stop();
-
-    // MUST be int64_t (not long)
     void seekUs(int64_t us);
 
 private:
-    // Decode thread (audio master)
-    void decodeLoop();
+    // AAudio callback
+    static aaudio_data_callback_result_t
+    audioCallback(
+            AAudioStream* stream,
+            void* userData,
+            void* audioData,
+            int32_t numFrames
+    );
 
-    // AAudio
-    bool setupAAudio();
+    aaudio_data_callback_result_t
+    onAudioCallback(void* audioData, int32_t numFrames);
+
+    void cleanupCodec();
     void cleanupAAudio();
 
-    // Media
-    void cleanupCodec();
-
 private:
-    // Master clock
-    Clock* clock_ = nullptr;
+    Clock* clock_;
 
-    // Media
     AMediaExtractor* extractor_ = nullptr;
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
 
-    // AAudio
     AAudioStream* stream_ = nullptr;
 
-    // Threading
-    std::atomic<bool> running_{false};
-    std::thread decodeThread_;
-
-    // Audio format
     int sampleRate_ = 44100;
     int channelCount_ = 2;
+
+    std::atomic<bool> running_{false};
 };
