@@ -88,9 +88,29 @@ bool AudioEngine::open(const char* path) {
 
 /* ───────────────── AAudio ───────────────── */
 
+void AudioEngine::errorCallback(
+        AAudioStream* /* stream */,
+        void* userData,
+        aaudio_result_t error) {
+    auto* self = static_cast<AudioEngine*>(userData);
+    LOGE("AAudio stream error: %d", error);
+
+    // Attempt stream recovery on disconnect
+    // Note: Recovery from within the callback may not always be safe,
+    // but for DISCONNECTED errors this is a common pattern
+    if (error == AAUDIO_ERROR_DISCONNECTED) {
+        self->cleanupAAudio();
+        self->setupAAudio();
+    }
+}
+
 bool AudioEngine::setupAAudio() {
     AAudioStreamBuilder* builder = nullptr;
-    AAudio_createStreamBuilder(&builder);
+    aaudio_result_t result = AAudio_createStreamBuilder(&builder);
+    if (result != AAUDIO_OK) {
+        LOGE("Failed to create AAudio stream builder: %d", result);
+        return false;
+    }
 
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
@@ -99,16 +119,55 @@ bool AudioEngine::setupAAudio() {
     AAudioStreamBuilder_setPerformanceMode(
             builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
 
+    // Use SHARED mode for broader device compatibility
+    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+
     AAudioStreamBuilder_setDataCallback(
             builder, audioCallback, this);
+    AAudioStreamBuilder_setErrorCallback(
+            builder, errorCallback, this);
 
-    if (AAudioStreamBuilder_openStream(builder, &stream_) != AAUDIO_OK) {
-        AAudioStreamBuilder_delete(builder);
+    result = AAudioStreamBuilder_openStream(builder, &stream_);
+    AAudioStreamBuilder_delete(builder);
+
+    if (result != AAUDIO_OK) {
+        LOGE("Failed to open AAudio stream: %d", result);
         return false;
     }
 
-    AAudioStreamBuilder_delete(builder);
-    AAudioStream_requestStart(stream_);
+    result = AAudioStream_requestStart(stream_);
+    if (result != AAUDIO_OK) {
+        LOGE("Failed to start AAudio stream: %d", result);
+        AAudioStream_close(stream_);
+        stream_ = nullptr;
+        return false;
+    }
+
+    // Wait for the stream to actually start (max ~100ms)
+    aaudio_stream_state_t state = AAudioStream_getState(stream_);
+    aaudio_stream_state_t nextState = AAUDIO_STREAM_STATE_UNINITIALIZED;
+    int retries = 10;
+    while (state != AAUDIO_STREAM_STATE_STARTED && retries-- > 0) {
+        result = AAudioStream_waitForStateChange(
+                stream_, state, &nextState, 10'000'000LL); // 10ms timeout
+        if (result != AAUDIO_OK) {
+            LOGE("Error waiting for stream state change: %d", result);
+            break;
+        }
+        state = nextState;
+    }
+
+    if (state != AAUDIO_STREAM_STATE_STARTED) {
+        LOGE("AAudio stream failed to reach started state, current state: %d", state);
+        AAudioStream_close(stream_);
+        stream_ = nullptr;
+        return false;
+    }
+
+    LOGD("AAudio stream started successfully, sample rate: %d, channels: %d",
+         AAudioStream_getSampleRate(stream_),
+         AAudioStream_getChannelCount(stream_));
+
     return true;
 }
 
