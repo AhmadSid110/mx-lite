@@ -36,7 +36,7 @@ class PlayerController : PlayerEngine {
 
         // 2️⃣ Start native audio FIRST (if present)
         if (hasAudio) {
-            NativePlayer.nativePlay(file.absolutePath)
+            NativePlayer.play(context, file.absolutePath)
         }
 
         // 3️⃣ Start video immediately
