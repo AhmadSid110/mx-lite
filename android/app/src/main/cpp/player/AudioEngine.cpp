@@ -95,12 +95,10 @@ void AudioEngine::errorCallback(
     auto* self = static_cast<AudioEngine*>(userData);
     LOGE("AAudio stream error: %d", error);
 
-    // Attempt stream recovery on disconnect
-    // Note: Recovery from within the callback may not always be safe,
-    // but for DISCONNECTED errors this is a common pattern
+    // Set flag for stream recovery - do NOT call setupAAudio() from within
+    // the callback as it runs on the audio thread and may cause deadlocks
     if (error == AAUDIO_ERROR_DISCONNECTED) {
-        self->cleanupAAudio();
-        self->setupAAudio();
+        self->needsRestart_.store(true, std::memory_order_release);
     }
 }
 
@@ -265,6 +263,18 @@ void AudioEngine::decodeLoop() {
     std::vector<int16_t> tmp;
 
     while (running_) {
+        // Check if stream needs restart (e.g., after disconnect error)
+        if (needsRestart_.load(std::memory_order_acquire)) {
+            LOGD("Restarting AAudio stream due to disconnect");
+            cleanupAAudio();
+            if (!setupAAudio()) {
+                LOGE("Failed to restart AAudio stream");
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            needsRestart_.store(false, std::memory_order_release);
+        }
+
         ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 2000);
         if (in >= 0) {
             size_t cap;
