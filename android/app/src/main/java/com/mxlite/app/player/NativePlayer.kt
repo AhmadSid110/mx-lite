@@ -4,60 +4,33 @@ import android.content.Context
 
 /**
  * JNI bridge to native audio engine.
- *
- * 🔑 Audio is the MASTER clock.
- * All timing comes from native C++ AudioEngine.
- *
- * RULES:
- * - JNI methods are PRIVATE
- * - Kotlin exposes a SAFE public API
- * - PlayerController NEVER touches JNI directly
+ * Audio is the MASTER clock.
+ * All timing comes from C++.
  */
 object NativePlayer {
-
     init {
         System.loadLibrary("mxplayer")
     }
 
-    /* ───────────────────────────── */
-    /* JNI (PRIVATE — DO NOT USE) */
-    /* ───────────────────────────── */
+    /* ───────── JNI (internal) ───────── */
 
-    private external fun nativePlay(path: String)
-    private external fun nativeStop()
-    private external fun nativeSeek(positionUs: Long)
-    private external fun nativeRelease()
-    private external fun nativeGetClockUs(): Long
+    internal external fun nativePlay(path: String)
+    internal external fun nativeStop()
+    internal external fun nativeSeek(positionUs: Long)
+    internal external fun nativeRelease()
+    internal external fun nativeGetClockUs(): Long
 
-    /* ───────────────────────────── */
-    /* PUBLIC API (USED BY APP) */
-    /* ───────────────────────────── */
+    /* ───────── Public API ───────── */
 
     fun play(context: Context, path: String) {
-        // Context kept for future SAF / content:// handling
         nativePlay(path)
     }
 
-    fun stop() {
-        nativeStop()
-    }
+    fun stop() = nativeStop()
+    fun seek(positionUs: Long) = nativeSeek(positionUs)
+    fun release() = nativeRelease()
 
-    fun seek(positionUs: Long) {
-        nativeSeek(positionUs)
-    }
-
-    fun release() {
-        nativeRelease()
-    }
-
-    fun getClockUs(): Long {
-        return nativeGetClockUs()
-    }
-
-    /* ───────────────────────────── */
-    /* DEBUG / DIAGNOSTIC JNI */
-    /* (USED BY ON-SCREEN DEBUG UI) */
-    /* ───────────────────────────── */
+    /* ───────── DEBUG JNI ───────── */
 
     external fun dbgEngineCreated(): Boolean
     external fun dbgAAudioOpened(): Boolean
