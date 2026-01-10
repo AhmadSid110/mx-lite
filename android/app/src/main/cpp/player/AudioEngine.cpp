@@ -5,12 +5,13 @@
 #include <cmath>
 #include <chrono>
 #include <thread>
+#include <algorithm>
 
-#define LOG_TAG "AudioEngine"
+#define LOG_TAG "AudioEngineDBG"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-/* ───────────────── PCM helper ───────────────── */
+/* ───── PCM helper ───── */
 
 static inline int16_t floatToPcm16(float v) {
     if (v > 1.0f) v = 1.0f;
@@ -18,7 +19,7 @@ static inline int16_t floatToPcm16(float v) {
     return static_cast<int16_t>(v * 32767.0f);
 }
 
-/* ───────────────── Lifecycle ───────────────── */
+/* ───── Lifecycle ───── */
 
 AudioEngine::AudioEngine(Clock* clock)
         : clock_(clock) {}
@@ -39,9 +40,19 @@ AudioEngine::~AudioEngine() {
     }
 }
 
-/* ───────────────── Open ───────────────── */
+/* ───── DEBUG GETTERS ───── */
+
+bool AudioEngine::isAAudioOpened() const { return aaudioOpened_.load(); }
+bool AudioEngine::isAAudioStarted() const { return aaudioStarted_.load(); }
+bool AudioEngine::isCallbackRunning() const { return callbackSeen_.load(); }
+int64_t AudioEngine::getCallbackCount() const { return callbackCount_.load(); }
+int64_t AudioEngine::getFramesPlayed() const { return framesPlayed_.load(); }
+
+/* ───── Open ───── */
 
 bool AudioEngine::open(const char* path) {
+    LOGD("open()");
+
     extractor_ = AMediaExtractor_new();
     if (!extractor_) return false;
 
@@ -49,14 +60,14 @@ bool AudioEngine::open(const char* path) {
         return false;
 
     int audioTrack = -1;
-    const size_t tracks = AMediaExtractor_getTrackCount(extractor_);
+    size_t tracks = AMediaExtractor_getTrackCount(extractor_);
 
     for (size_t i = 0; i < tracks; i++) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
         const char* mime = nullptr;
         AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
 
-        if (mime && strncmp(mime, "audio/", 6) == 0) {
+        if (mime && !strncmp(mime, "audio/", 6)) {
             format_ = fmt;
             audioTrack = (int)i;
             break;
@@ -79,36 +90,46 @@ bool AudioEngine::open(const char* path) {
     if (AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0) != AMEDIA_OK)
         return false;
 
-    /* Ring buffer = 500 ms */
     ringFrames_ = sampleRate_ / 2;
     ring_.resize(ringFrames_ * channelCount_);
 
-    return setupAAudio() && AMediaCodec_start(codec_) == AMEDIA_OK;
+    if (!setupAAudio()) return false;
+    if (AMediaCodec_start(codec_) != AMEDIA_OK) return false;
+
+    LOGD("open() SUCCESS");
+    return true;
 }
 
-/* ───────────────── AAudio ───────────────── */
+/* ───── AAudio ───── */
 
 bool AudioEngine::setupAAudio() {
-    AAudioStreamBuilder* builder = nullptr;
-    AAudio_createStreamBuilder(&builder);
+    AAudioStreamBuilder* b = nullptr;
+    AAudio_createStreamBuilder(&b);
 
-    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setChannelCount(builder, channelCount_);
-    AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
-    AAudioStreamBuilder_setPerformanceMode(
-            builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
+    AAudioStreamBuilder_setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
+    AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
+    AAudioStreamBuilder_setChannelCount(b, channelCount_);
+    AAudioStreamBuilder_setSampleRate(b, sampleRate_);
+    AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setDataCallback(b, audioCallback, this);
 
-    AAudioStreamBuilder_setDataCallback(
-            builder, audioCallback, this);
-
-    if (AAudioStreamBuilder_openStream(builder, &stream_) != AAUDIO_OK) {
-        AAudioStreamBuilder_delete(builder);
+    if (AAudioStreamBuilder_openStream(b, &stream_) != AAUDIO_OK) {
+        AAudioStreamBuilder_delete(b);
+        LOGE("AAudio open FAILED");
         return false;
     }
 
-    AAudioStreamBuilder_delete(builder);
-    AAudioStream_requestStart(stream_);
+    AAudioStreamBuilder_delete(b);
+    aaudioOpened_.store(true);
+
+    if (AAudioStream_requestStart(stream_) != AAUDIO_OK) {
+        LOGE("AAudio start FAILED");
+        return false;
+    }
+
+    aaudioStarted_.store(true);
+    LOGD("AAudio started");
     return true;
 }
 
@@ -120,7 +141,7 @@ void AudioEngine::cleanupAAudio() {
     }
 }
 
-/* ───────────────── Start / Stop ───────────────── */
+/* ───── Control ───── */
 
 void AudioEngine::start() {
     running_ = true;
@@ -134,8 +155,6 @@ void AudioEngine::stop() {
         decodeThread_.join();
 }
 
-/* ───────────────── Seek ───────────────── */
-
 void AudioEngine::seekUs(int64_t us) {
     stop();
     AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
@@ -146,60 +165,41 @@ void AudioEngine::seekUs(int64_t us) {
     start();
 }
 
-/* ───────────────── Ring Buffer ───────────────── */
-
-inline int64_t AudioEngine::getWritePos() const {
-    return writePos_.load(std::memory_order_acquire);
-}
-
-inline int64_t AudioEngine::getReadPos() const {
-    return readPos_.load(std::memory_order_acquire);
-}
+/* ───── Ring buffer ───── */
 
 void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
-    int written = 0;
-
-    while (written < frames && running_) {
-        int64_t wp = getWritePos();
-        int64_t rp = getReadPos();
-        int64_t used = wp - rp;
-        int64_t free = ringFrames_ - used;
-
+    int w = 0;
+    while (w < frames && running_) {
+        int64_t wp = writePos_.load();
+        int64_t rp = readPos_.load();
+        int64_t free = ringFrames_ - (wp - rp);
         if (free <= 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
-
-        int chunk = std::min((int)free, frames - written);
-
-        for (int i = 0; i < chunk * channelCount_; i++) {
+        int chunk = std::min((int)free, frames - w);
+        for (int i = 0; i < chunk * channelCount_; i++)
             ring_[(wp * channelCount_ + i) % ring_.size()] =
-                    in[written * channelCount_ + i];
-        }
-
-        writePos_.store(wp + chunk, std::memory_order_release);
-        written += chunk;
+                    in[w * channelCount_ + i];
+        writePos_.store(wp + chunk);
+        w += chunk;
     }
 }
 
 int AudioEngine::readPcm(int16_t* out, int frames) {
-    int64_t rp = getReadPos();
-    int64_t wp = getWritePos();
-    int64_t avail = wp - rp;
-
+    int64_t rp = readPos_.load();
+    int64_t wp = writePos_.load();
+    int avail = (int)(wp - rp);
     if (avail <= 0) return 0;
 
-    int chunk = std::min((int)avail, frames);
-
-    for (int i = 0; i < chunk * channelCount_; i++) {
+    int chunk = std::min(avail, frames);
+    for (int i = 0; i < chunk * channelCount_; i++)
         out[i] = ring_[(rp * channelCount_ + i) % ring_.size()];
-    }
-
-    readPos_.store(rp + chunk, std::memory_order_release);
+    readPos_.store(rp + chunk);
     return chunk;
 }
 
-/* ───────────────── Decoder Thread ───────────────── */
+/* ───── Decoder ───── */
 
 void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
@@ -211,32 +211,20 @@ void AudioEngine::decodeLoop() {
             size_t cap;
             uint8_t* buf = AMediaCodec_getInputBuffer(codec_, in, &cap);
             ssize_t sz = AMediaExtractor_readSampleData(extractor_, buf, cap);
-
-            if (sz < 0) {
-                AMediaCodec_queueInputBuffer(codec_, in, 0, 0, 0,
-                                             AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
-                break;
-            }
-
+            if (sz < 0) break;
             AMediaCodec_queueInputBuffer(
                     codec_, in, 0, sz,
                     AMediaExtractor_getSampleTime(extractor_), 0);
-
             AMediaExtractor_advance(extractor_);
         }
 
         ssize_t out = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
         if (out >= 0 && info.size > 0) {
             uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, out, nullptr);
-
-            bool isFloat =
-                    info.size % (sizeof(float) * channelCount_) == 0;
-
+            bool isFloat = info.size % (sizeof(float) * channelCount_) == 0;
             int samples = info.size / (isFloat ? sizeof(float) : sizeof(int16_t));
             int frames = samples / channelCount_;
-
             tmp.resize(samples);
-
             if (isFloat) {
                 float* f = (float*)(raw + info.offset);
                 for (int i = 0; i < samples; i++)
@@ -244,24 +232,23 @@ void AudioEngine::decodeLoop() {
             } else {
                 memcpy(tmp.data(), raw + info.offset, info.size);
             }
-
             writePcmBlocking(tmp.data(), frames);
             AMediaCodec_releaseOutputBuffer(codec_, out, false);
         }
     }
 }
 
-/* ───────────────── Audio Callback ───────────────── */
+/* ───── CALLBACK ───── */
 
 aaudio_data_callback_result_t AudioEngine::audioCallback(
-        AAudioStream*,
-        void* userData,
-        void* audioData,
-        int32_t numFrames) {
+        AAudioStream*, void* userData, void* audioData, int32_t numFrames) {
 
     auto* self = static_cast<AudioEngine*>(userData);
-    auto* out = (int16_t*)audioData;
 
+    self->callbackSeen_.store(true);
+    self->callbackCount_.fetch_add(1);
+
+    int16_t* out = (int16_t*)audioData;
     int frames = self->readPcm(out, numFrames);
 
     if (frames < numFrames) {
@@ -271,6 +258,7 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
                self->channelCount_ * sizeof(int16_t));
     }
 
+    self->framesPlayed_.fetch_add(numFrames);
     self->clock_->addUs(
             (int64_t)numFrames * 1'000'000LL / self->sampleRate_);
 
