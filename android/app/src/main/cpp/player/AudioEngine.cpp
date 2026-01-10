@@ -4,26 +4,10 @@
 #include <android/log.h>
 #include <cstring>
 #include <vector>
-#include <cmath>
-#include <unistd.h>
 
 #define LOG_TAG "AudioEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-
-/* ───────────────────────────────────────────── */
-/* PCM helpers */
-/* ───────────────────────────────────────────── */
-
-static inline int16_t floatToPcm16(float v) {
-    if (v > 1.0f) v = 1.0f;
-    if (v < -1.0f) v = -1.0f;
-    return static_cast<int16_t>(v * 32767.0f);
-}
-
-/* ───────────────────────────────────────────── */
-/* Lifecycle */
-/* ───────────────────────────────────────────── */
 
 AudioEngine::AudioEngine(Clock* clock)
         : clock_(clock) {}
@@ -34,9 +18,9 @@ AudioEngine::~AudioEngine() {
     cleanupAAudio();
 }
 
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 /* Open media */
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 
 bool AudioEngine::open(const char* path) {
     extractor_ = AMediaExtractor_new();
@@ -46,7 +30,7 @@ bool AudioEngine::open(const char* path) {
         return false;
 
     int audioTrack = -1;
-    const size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
+    size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
 
     for (size_t i = 0; i < trackCount; i++) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
@@ -55,7 +39,7 @@ bool AudioEngine::open(const char* path) {
 
         if (mime && strncmp(mime, "audio/", 6) == 0) {
             format_ = fmt;
-            audioTrack = static_cast<int>(i);
+            audioTrack = (int)i;
             break;
         }
         AMediaFormat_delete(fmt);
@@ -64,6 +48,7 @@ bool AudioEngine::open(const char* path) {
     if (audioTrack < 0) return false;
 
     AMediaExtractor_selectTrack(extractor_, audioTrack);
+
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sampleRate_);
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &channelCount_);
 
@@ -73,8 +58,15 @@ bool AudioEngine::open(const char* path) {
     codec_ = AMediaCodec_createDecoderByType(mime);
     if (!codec_) return false;
 
-    if (AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0) != AMEDIA_OK)
+    /* 🔑 ABSOLUTELY REQUIRED */
+    AMediaFormat_setInt32(format_, AMEDIAFORMAT_KEY_PCM_ENCODING, 2); // PCM_16
+    AMediaFormat_setInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, sampleRate_);
+    AMediaFormat_setInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, channelCount_);
+
+    if (AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0) != AMEDIA_OK) {
+        LOGE("AMediaCodec_configure failed");
         return false;
+    }
 
     if (!setupAAudio())
         return false;
@@ -82,9 +74,9 @@ bool AudioEngine::open(const char* path) {
     return AMediaCodec_start(codec_) == AMEDIA_OK;
 }
 
-/* ───────────────────────────────────────────── */
-/* AAudio setup */
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
+/* AAudio */
+/* ───────────────────────────── */
 
 bool AudioEngine::setupAAudio() {
     AAudioStreamBuilder* builder = nullptr;
@@ -107,33 +99,12 @@ bool AudioEngine::setupAAudio() {
     }
 
     AAudioStream_requestStart(stream_);
-
-    /* 🔑 MIUI / XIAOMI SAFE START WAIT */
-    aaudio_stream_state_t state = AAUDIO_STREAM_STATE_UNINITIALIZED;
-    int retries = 0;
-
-    while (retries < 200) { // ~2 seconds max
-        state = AAudioStream_getState(stream_);
-        if (state == AAUDIO_STREAM_STATE_STARTED) {
-            LOGD("AAudio stream STARTED");
-            return true;
-        }
-        if (state == AAUDIO_STREAM_STATE_DISCONNECTED ||
-            state == AAUDIO_STREAM_STATE_STOPPED) {
-            LOGE("AAudio failed to start, state=%d", state);
-            return false;
-        }
-        usleep(10'000); // 10 ms
-        retries++;
-    }
-
-    LOGE("AAudio start timeout");
-    return false;
+    return true;
 }
 
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 /* Start / Stop */
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 
 void AudioEngine::start() {
     running_ = true;
@@ -147,9 +118,9 @@ void AudioEngine::stop() {
         decodeThread_.join();
 }
 
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 /* Seek */
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 
 void AudioEngine::seekUs(int64_t us) {
     if (!extractor_ || !codec_) return;
@@ -166,60 +137,48 @@ void AudioEngine::seekUs(int64_t us) {
     decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
-/* ───────────────────────────────────────────── */
-/* Decode loop (MASTER CLOCK SOURCE) */
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
+/* Decode loop (MASTER CLOCK) */
+/* ───────────────────────────── */
 
 void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
-    std::vector<int16_t> pcm16;
 
     while (running_) {
 
-        ssize_t inIndex = AMediaCodec_dequeueInputBuffer(codec_, 10'000);
-        if (inIndex >= 0) {
+        ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 10000);
+        if (in >= 0) {
             size_t cap;
-            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, inIndex, &cap);
-            ssize_t size = AMediaExtractor_readSampleData(extractor_, buf, cap);
+            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, in, &cap);
+            ssize_t sz = AMediaExtractor_readSampleData(extractor_, buf, cap);
 
-            if (size < 0) {
+            if (sz < 0) {
                 AMediaCodec_queueInputBuffer(
-                        codec_, inIndex, 0, 0, 0,
+                        codec_, in, 0, 0, 0,
                         AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
                 );
             } else {
                 AMediaCodec_queueInputBuffer(
-                        codec_, inIndex, 0, size,
+                        codec_, in, 0, sz,
                         AMediaExtractor_getSampleTime(extractor_), 0
                 );
                 AMediaExtractor_advance(extractor_);
             }
         }
 
-        ssize_t outIndex = AMediaCodec_dequeueOutputBuffer(codec_, &info, 10'000);
-        if (outIndex < 0 || info.size <= 0)
+        ssize_t out = AMediaCodec_dequeueOutputBuffer(codec_, &info, 10000);
+        if (out < 0 || info.size <= 0)
             continue;
 
-        uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
+        int16_t* pcm =
+                reinterpret_cast<int16_t*>(
+                        AMediaCodec_getOutputBuffer(codec_, out, nullptr)
+                        + info.offset);
 
-        bool isFloat =
-                (info.size % (sizeof(float) * channelCount_)) == 0;
+        int frames = info.size / (2 * channelCount_);
 
-        int samples = info.size / (isFloat ? sizeof(float) : sizeof(int16_t));
-        int frames = samples / channelCount_;
-
-        aaudio_result_t wr;
-
-        if (isFloat) {
-            float* f = reinterpret_cast<float*>(raw + info.offset);
-            pcm16.resize(samples);
-            for (int i = 0; i < samples; i++)
-                pcm16[i] = floatToPcm16(f[i]);
-            wr = AAudioStream_write(stream_, pcm16.data(), frames, -1);
-        } else {
-            int16_t* pcm = reinterpret_cast<int16_t*>(raw + info.offset);
-            wr = AAudioStream_write(stream_, pcm, frames, -1);
-        }
+        aaudio_result_t wr =
+                AAudioStream_write(stream_, pcm, frames, -1);
 
         if (wr > 0) {
             int64_t deltaUs =
@@ -227,13 +186,13 @@ void AudioEngine::decodeLoop() {
             clock_->addUs(deltaUs);
         }
 
-        AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
+        AMediaCodec_releaseOutputBuffer(codec_, out, false);
     }
 }
 
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 /* Cleanup */
-/* ───────────────────────────────────────────── */
+/* ───────────────────────────── */
 
 void AudioEngine::cleanupCodec() {
     if (codec_) {
