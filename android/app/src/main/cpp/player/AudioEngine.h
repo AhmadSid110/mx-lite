@@ -4,19 +4,13 @@
 #include <media/NdkMediaCodec.h>
 #include <aaudio/AAudio.h>
 
-#include <thread>
 #include <atomic>
+#include <thread>
 #include <vector>
 #include <cstdint>
 
 #include "Clock.h"
 
-/*
- * AudioEngine
- *  - Decoder thread produces PCM16
- *  - AAudio callback consumes PCM16
- *  - Audio callback is MASTER clock
- */
 class AudioEngine {
 public:
     explicit AudioEngine(Clock* clock);
@@ -28,10 +22,10 @@ public:
     void seekUs(int64_t us);
 
 private:
-    /* -------- Decoder thread -------- */
+    /* ---------- Decoder ---------- */
     void decodeLoop();
 
-    /* -------- AAudio -------- */
+    /* ---------- AAudio ---------- */
     bool setupAAudio();
     void cleanupAAudio();
 
@@ -42,9 +36,12 @@ private:
             int32_t numFrames
     );
 
-    /* -------- Ring buffer -------- */
+    /* ---------- Ring Buffer ---------- */
+    void writePcmBlocking(const int16_t* in, int frames);
     int readPcm(int16_t* out, int frames);
-    int writePcm(const int16_t* in, int frames);
+
+    inline int64_t getWritePos() const;
+    inline int64_t getReadPos() const;
 
 private:
     Clock* clock_;
@@ -54,20 +51,19 @@ private:
     AMediaCodec* codec_ = nullptr;
     AMediaFormat* format_ = nullptr;
 
-    /* Audio format */
-    int sampleRate_ = 44100;
+    /* Audio */
+    AAudioStream* stream_ = nullptr;
+    int sampleRate_ = 48000;
     int channelCount_ = 2;
 
-    /* Decoder thread */
-    std::thread decodeThread_;
+    /* Threads */
     std::atomic<bool> running_{false};
+    std::thread decodeThread_;
 
-    /* Ring buffer (PCM16 frames) */
+    /* Ring buffer */
     std::vector<int16_t> ring_;
-    std::atomic<int> writePos_{0};
-    std::atomic<int> readPos_{0};
-    int ringFrames_ = 0;
+    int64_t ringFrames_ = 0;
 
-    /* AAudio */
-    AAudioStream* stream_ = nullptr;
+    std::atomic<int64_t> writePos_{0};
+    std::atomic<int64_t> readPos_{0};
 };
