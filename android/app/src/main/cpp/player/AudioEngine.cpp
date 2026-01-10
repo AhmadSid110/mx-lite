@@ -119,6 +119,7 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
     }
     
     // Update clock
+    // Safe: framesRead is small (callback size < 8192), no overflow possible
     if (engine->clock_ && framesRead > 0) {
         int64_t deltaUs = (framesRead * 1000000LL) / engine->sampleRate_;
         engine->clock_->addUs(deltaUs);
@@ -140,6 +141,7 @@ int AudioEngine::readPcm(int16_t* out, int frames) {
     
     for (int f = 0; f < framesToRead; ++f) {
         for (int ch = 0; ch < channelCount_; ++ch) {
+            // Safe: (read+f) % ringFrames_ < ringFrames_, then * channelCount_ = ring_.size()
             size_t readIdx = static_cast<size_t>(((read + f) % ringFrames_) * channelCount_ + ch);
             int outIdx = f * channelCount_ + ch;
             out[outIdx] = ring_[readIdx];
@@ -168,6 +170,7 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
         }
         
         // Write all channels for this frame
+        // Safe: write % ringFrames_ < ringFrames_, then * channelCount_ = ring_.size()
         for (int ch = 0; ch < channelCount_; ++ch) {
             size_t idx = static_cast<size_t>((write % ringFrames_) * channelCount_ + ch);
             ring_[idx] = in[f * channelCount_ + ch];
