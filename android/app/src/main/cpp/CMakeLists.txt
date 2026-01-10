@@ -5,6 +5,7 @@ add_library(
     mxplayer
     SHARED
     player/AudioEngine.cpp
+    player/AudioDebug.cpp
     player/Clock.cpp
     JniBridge.cpp
 )
