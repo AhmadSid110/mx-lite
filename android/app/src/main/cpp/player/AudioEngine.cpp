@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 #include "AudioDebug.h"
+#include <algorithm>
 #include <thread>
 #include <chrono>
 
@@ -179,7 +180,10 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
 
 void AudioEngine::decodeLoop() {
     // Placeholder for decode loop implementation
-    // This would extract and decode audio data
+    // This would extract and decode audio data using MediaCodec
+    // When MediaCodec outputs PCM data, set:
+    // gAudioDebug.decoderProduced.store(true);
+    
     while (running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
