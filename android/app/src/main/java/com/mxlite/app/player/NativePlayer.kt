@@ -9,37 +9,18 @@ import android.net.Uri
  * All timing comes from C++.
  */
 object NativePlayer {
-
     init {
         System.loadLibrary("mxplayer")
     }
 
-    /* ───────────────────────────── */
-    /* INTERNAL JNI CALLS (DO NOT USE DIRECTLY) */
-    /* ───────────────────────────── */
-
+    // JNI stays PRIVATE
     private external fun nativePlay(path: String)
-    external fun nativeStop()
-    external fun nativeGetClockUs(): Long
-    external fun nativeSeek(positionUs: Long)
-    external fun nativeRelease()
 
-    /* ───────────────────────────── */
-    /* PUBLIC SAFE API */
-    /* ───────────────────────────── */
-
-    /**
-     * Start native audio playback.
-     * This is the ONLY function the app should call.
-     */
+    // PUBLIC API used by PlayerController
     fun play(context: Context, path: String) {
-        val nativePath = NativeFileResolver.resolveToInternalPath(
-            context = context,
-            uri = Uri.parse(path)
-        )
-
-        nativePlay(nativePath)
+        nativePlay(path)
     }
+}
 
     /* ───────────────────────────── */
     /* DEBUG / DIAGNOSTIC JNI */
