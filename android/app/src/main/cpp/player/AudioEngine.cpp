@@ -4,7 +4,6 @@
 #include <aaudio/AAudio.h>
 #include <media/NdkMediaExtractor.h>
 #include <media/NdkMediaCodec.h>
-#include <media/NdkMediaFormat.h>
 
 #include <android/log.h>
 #include <algorithm>
@@ -18,6 +17,14 @@
 
 extern AudioDebug gAudioDebug;
 
+/* ===================== PCM helper ===================== */
+
+static inline int16_t floatToPcm16(float v) {
+    if (v > 1.0f) v = 1.0f;
+    if (v < -1.0f) v = -1.0f;
+    return static_cast<int16_t>(v * 32767.0f);
+}
+
 /* ===================== Lifecycle ===================== */
 
 AudioEngine::AudioEngine(Clock* clock)
@@ -28,26 +35,12 @@ AudioEngine::AudioEngine(Clock* clock)
 AudioEngine::~AudioEngine() {
     stop();
     cleanupAAudio();
-
-    if (codec_) {
-        AMediaCodec_stop(codec_);
-        AMediaCodec_delete(codec_);
-        codec_ = nullptr;
-    }
-    if (extractor_) {
-        AMediaExtractor_delete(extractor_);
-        extractor_ = nullptr;
-    }
-    if (format_) {
-        AMediaFormat_delete(format_);
-        format_ = nullptr;
-    }
+    cleanupMedia();
 }
 
 /* ===================== Open ===================== */
 
 bool AudioEngine::open(const char* path) {
-    // --- Extractor ---
     extractor_ = AMediaExtractor_new();
     if (!extractor_) return false;
 
@@ -57,13 +50,14 @@ bool AudioEngine::open(const char* path) {
     }
 
     int audioTrack = -1;
+    size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
 
-    for (size_t i = 0; i < AMediaExtractor_getTrackCount(extractor_); i++) {
+    for (size_t i = 0; i < trackCount; ++i) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
         const char* mime = nullptr;
+        AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
 
-        if (AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime) &&
-            mime && !strncmp(mime, "audio/", 6)) {
+        if (mime && !strncmp(mime, "audio/", 6)) {
             format_ = fmt;
             audioTrack = (int)i;
             break;
@@ -72,19 +66,17 @@ bool AudioEngine::open(const char* path) {
     }
 
     if (audioTrack < 0) {
-        LOGE("No audio track found");
+        LOGE("No audio track");
         return false;
     }
 
     AMediaExtractor_selectTrack(extractor_, audioTrack);
-
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sampleRate_);
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &channelCount_);
 
     const char* mime = nullptr;
     AMediaFormat_getString(format_, AMEDIAFORMAT_KEY_MIME, &mime);
 
-    // --- Codec ---
     codec_ = AMediaCodec_createDecoderByType(mime);
     if (!codec_) return false;
 
@@ -94,17 +86,11 @@ bool AudioEngine::open(const char* path) {
     if (AMediaCodec_start(codec_) != AMEDIA_OK)
         return false;
 
-    // --- AAudio ---
-    if (!setupAAudio())
-        return false;
-
-    // --- Ring buffer (1 second) ---
-    ringFrames_ = sampleRate_;
+    ringFrames_ = sampleRate_; // 1 second buffer
     ring_.resize(ringFrames_ * channelCount_);
 
-    // --- Start decode thread ---
-    running_.store(true);
-    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
+    if (!setupAAudio())
+        return false;
 
     return true;
 }
@@ -114,11 +100,16 @@ bool AudioEngine::open(const char* path) {
 void AudioEngine::start() {
     if (!stream_) return;
 
-    AAudioStream_requestStart(stream_);
+    running_.store(true);
+    writePos_.store(0);
+    readPos_.store(0);
 
+    AAudioStream_requestStart(stream_);
     if (AAudioStream_getState(stream_) == AAUDIO_STREAM_STATE_STARTED) {
         gAudioDebug.aaudioStarted.store(true);
     }
+
+    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
 void AudioEngine::stop() {
@@ -131,13 +122,11 @@ void AudioEngine::stop() {
         AAudioStream_requestStop(stream_);
 }
 
-/* ===================== Seek ===================== */
-
 void AudioEngine::seekUs(int64_t us) {
     stop();
 
-    readPos_.store(0);
     writePos_.store(0);
+    readPos_.store(0);
     std::fill(ring_.begin(), ring_.end(), 0);
 
     if (clock_)
@@ -149,8 +138,7 @@ void AudioEngine::seekUs(int64_t us) {
     if (codec_)
         AMediaCodec_flush(codec_);
 
-    running_.store(true);
-    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
+    start();
 }
 
 /* ===================== AAudio ===================== */
@@ -163,9 +151,7 @@ bool AudioEngine::setupAAudio() {
 
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
-    AAudioStreamBuilder_setPerformanceMode(
-            builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
     AAudioStreamBuilder_setChannelCount(builder, channelCount_);
     AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
@@ -188,33 +174,49 @@ void AudioEngine::cleanupAAudio() {
     }
 }
 
+void AudioEngine::cleanupMedia() {
+    if (codec_) {
+        AMediaCodec_stop(codec_);
+        AMediaCodec_delete(codec_);
+        codec_ = nullptr;
+    }
+    if (extractor_) {
+        AMediaExtractor_delete(extractor_);
+        extractor_ = nullptr;
+    }
+    if (format_) {
+        AMediaFormat_delete(format_);
+        format_ = nullptr;
+    }
+}
+
 /* ===================== Ring Buffer ===================== */
 
 int AudioEngine::readPcm(int16_t* out, int frames) {
     int64_t r = readPos_.load();
     int64_t w = writePos_.load();
     int64_t avail = w - r;
-
     if (avail <= 0) return 0;
 
-    int toRead = (int)std::min<int64_t>(frames, avail);
+    int n = (int)std::min<int64_t>(frames, avail);
 
-    for (int f = 0; f < toRead; ++f) {
+    for (int f = 0; f < n; ++f) {
         size_t base = ((r + f) % ringFrames_) * channelCount_;
         memcpy(out + f * channelCount_,
                &ring_[base],
                channelCount_ * sizeof(int16_t));
     }
 
-    readPos_.store(r + toRead);
-    gAudioDebug.bufferFill.store(w - (r + toRead));
-    return toRead;
+    readPos_.store(r + n);
+    gAudioDebug.bufferFill.store(w - (r + n));
+    return n;
 }
 
 void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
     for (int f = 0; f < frames && running_.load(); ++f) {
-        while ((writePos_.load() - readPos_.load()) >= ringFrames_)
+        while ((writePos_.load() - readPos_.load()) >= ringFrames_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
 
         int64_t w = writePos_.load();
         size_t base = (w % ringFrames_) * channelCount_;
@@ -229,49 +231,54 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
     gAudioDebug.bufferFill.store(writePos_.load() - readPos_.load());
 }
 
-/* ===================== Decoder Thread ===================== */
+/* ===================== MediaCodec Decode ===================== */
 
 void AudioEngine::decodeLoop() {
     AMediaCodecBufferInfo info;
+    std::vector<int16_t> tmp;
 
     while (running_.load()) {
 
-        ssize_t inIdx = AMediaCodec_dequeueInputBuffer(codec_, 2000);
-        if (inIdx >= 0) {
-            size_t cap = 0;
-            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, inIdx, &cap);
+        ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 2000);
+        if (in >= 0) {
+            size_t cap;
+            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, in, &cap);
+            ssize_t sz = AMediaExtractor_readSampleData(extractor_, buf, cap);
 
-            ssize_t size = AMediaExtractor_readSampleData(extractor_, buf, cap);
-
-            if (size < 0) {
+            if (sz < 0) {
                 AMediaCodec_queueInputBuffer(
-                        codec_, inIdx, 0, 0, 0,
+                        codec_, in, 0, 0, 0,
                         AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
             } else {
                 AMediaCodec_queueInputBuffer(
-                        codec_, inIdx, 0, size,
+                        codec_, in, 0, sz,
                         AMediaExtractor_getSampleTime(extractor_), 0);
                 AMediaExtractor_advance(extractor_);
             }
         }
 
-        ssize_t outIdx = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
-        if (outIdx >= 0 && info.size > 0) {
+        ssize_t out = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
+        if (out >= 0 && info.size > 0) {
+            uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, out, nullptr);
 
-            uint8_t* pcm =
-                    AMediaCodec_getOutputBuffer(codec_, outIdx, nullptr);
+            bool isFloat = (info.size % (sizeof(float) * channelCount_) == 0);
+            int samples = info.size / (isFloat ? sizeof(float) : sizeof(int16_t));
+            int frames = samples / channelCount_;
 
-            int frames =
-                    info.size / (sizeof(int16_t) * channelCount_);
+            tmp.resize(samples);
+
+            if (isFloat) {
+                float* f = (float*)(raw + info.offset);
+                for (int i = 0; i < samples; ++i)
+                    tmp[i] = floatToPcm16(f[i]);
+            } else {
+                memcpy(tmp.data(), raw + info.offset, info.size);
+            }
 
             gAudioDebug.decoderProduced.store(true);
-            gAudioDebug.decodedFrames.fetch_add(frames);
+            writePcmBlocking(tmp.data(), frames);
 
-            writePcmBlocking(
-                    reinterpret_cast<int16_t*>(pcm + info.offset),
-                    frames);
-
-            AMediaCodec_releaseOutputBuffer(codec_, outIdx, false);
+            AMediaCodec_releaseOutputBuffer(codec_, out, false);
         }
     }
 }
@@ -288,7 +295,7 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
     gAudioDebug.callbackCalled.store(true);
     gAudioDebug.callbackCount.fetch_add(1);
 
-    auto* out = static_cast<int16_t*>(audioData);
+    auto* out = (int16_t*)audioData;
     int read = engine->readPcm(out, numFrames);
 
     if (read < numFrames) {
@@ -298,9 +305,9 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
                engine->channelCount_ * sizeof(int16_t));
     }
 
-    if (engine->clock_ && read > 0) {
+    if (engine->clock_) {
         engine->clock_->addUs(
-                (int64_t)read * 1000000LL / engine->sampleRate_);
+                (int64_t)numFrames * 1000000LL / engine->sampleRate_);
     }
 
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
