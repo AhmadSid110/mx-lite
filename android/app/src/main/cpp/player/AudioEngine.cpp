@@ -1,6 +1,7 @@
 #include "AudioEngine.h"
 #include "AudioDebug.h"
 #include <algorithm>
+#include <cstddef>
 #include <thread>
 #include <chrono>
 
@@ -135,11 +136,11 @@ int AudioEngine::readPcm(int16_t* out, int frames) {
         return 0;
     }
     
-    int framesToRead = std::min<int64_t>(frames, available);
+    int framesToRead = static_cast<int>(std::min(static_cast<int64_t>(frames), available));
     
     for (int f = 0; f < framesToRead; ++f) {
         for (int ch = 0; ch < channelCount_; ++ch) {
-            int64_t readIdx = ((read + f) * channelCount_ + ch) % ring_.size();
+            size_t readIdx = static_cast<size_t>(((read + f) % ringFrames_) * channelCount_ + ch);
             int outIdx = f * channelCount_ + ch;
             out[outIdx] = ring_[readIdx];
         }
@@ -168,7 +169,7 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
         
         // Write all channels for this frame
         for (int ch = 0; ch < channelCount_; ++ch) {
-            int64_t idx = (write * channelCount_ + ch) % ring_.size();
+            size_t idx = static_cast<size_t>((write % ringFrames_) * channelCount_ + ch);
             ring_[idx] = in[f * channelCount_ + ch];
         }
         
