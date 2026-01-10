@@ -36,12 +36,6 @@ private:
             int32_t numFrames
     );
 
-    static void errorCallback(
-            AAudioStream* stream,
-            void* userData,
-            aaudio_result_t error
-    );
-
     /* ---------- Ring Buffer ---------- */
     void writePcmBlocking(const int16_t* in, int frames);
     int readPcm(int16_t* out, int frames);
@@ -64,7 +58,6 @@ private:
 
     /* Threads */
     std::atomic<bool> running_{false};
-    std::atomic<bool> needsRestart_{false};
     std::thread decodeThread_;
 
     /* Ring buffer */
