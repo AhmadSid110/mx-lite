@@ -1,41 +1,45 @@
 package com.mxlite.app.player
 
+import android.content.Context
+import android.net.Uri
+
 /**
  * JNI bridge to native audio engine.
  * Audio is the MASTER clock.
  * All timing comes from C++.
  */
 object NativePlayer {
+
     init {
         System.loadLibrary("mxplayer")
     }
 
+    /* ───────────────────────────── */
+    /* INTERNAL JNI CALLS (DO NOT USE DIRECTLY) */
+    /* ───────────────────────────── */
+
+    private external fun nativePlay(path: String)
+    external fun nativeStop()
+    external fun nativeGetClockUs(): Long
+    external fun nativeSeek(positionUs: Long)
+    external fun nativeRelease()
+
+    /* ───────────────────────────── */
+    /* PUBLIC SAFE API */
+    /* ───────────────────────────── */
+
     /**
      * Start native audio playback.
-     * Must be called BEFORE video starts.
+     * This is the ONLY function the app should call.
      */
-    external fun nativePlay(path: String)
+    fun play(context: Context, path: String) {
+        val nativePath = NativeFileResolver.resolveToInternalPath(
+            context = context,
+            uri = Uri.parse(path)
+        )
 
-    /**
-     * Stop native audio playback.
-     */
-    external fun nativeStop()
-
-    /**
-     * Get current playback position in microseconds.
-     * This is the MASTER CLOCK.
-     */
-    external fun nativeGetClockUs(): Long
-
-    /**
-     * Seek to position in microseconds.
-     */
-    external fun nativeSeek(positionUs: Long)
-
-    /**
-     * Release native resources.
-     */
-    external fun nativeRelease()
+        nativePlay(nativePath)
+    }
 
     /* ───────────────────────────── */
     /* DEBUG / DIAGNOSTIC JNI */
