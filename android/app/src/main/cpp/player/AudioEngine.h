@@ -47,6 +47,7 @@ private:
     /* Internal */
     bool setupAAudio();
     void cleanupAAudio();
+    void cleanupMedia();   // ✅ ADD THIS LINE
 
     void decodeLoop();
     void writePcmBlocking(const int16_t* in, int frames);
