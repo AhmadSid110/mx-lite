@@ -1,9 +1,6 @@
-package com.mxlite.app.player
-
-import android.view.Surface
-import java.io.File
-
-class PlayerController : PlayerEngine {
+class PlayerController(
+    private val context: Context
+) : PlayerEngine {
 
     private val nativeClock = NativeClock()
     private val video = MediaCodecEngine(clock = nativeClock)
@@ -40,27 +37,26 @@ class PlayerController : PlayerEngine {
         }
 
         // 3️⃣ Start video immediately
-        // 🔑 Video will sync itself to audio clock when audio becomes active
         video.play(file)
     }
 
     override fun pause() {
         if (hasAudio) {
-            NativePlayer.nativeStop()
+            NativePlayer.stop()
         }
         video.pause()
     }
 
     override fun seekTo(positionMs: Long) {
         if (hasAudio) {
-            NativePlayer.nativeSeek(positionMs * 1000)
+            NativePlayer.seek(positionMs * 1000)
         }
         video.seekTo(positionMs)
     }
 
     override fun release() {
         if (hasAudio) {
-            NativePlayer.nativeRelease()
+            NativePlayer.release()
         }
         legacyAudio.release()
         video.release()
