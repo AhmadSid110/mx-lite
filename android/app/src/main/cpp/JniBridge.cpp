@@ -30,7 +30,6 @@ Java_com_mxlite_app_player_NativePlayer_nativePlay(
 
     if (!gAudio) {
         gAudio = new AudioEngine(&gClock);
-        gAudioDebug.engineCreated.store(true);
     }
 
     if (gAudio->open(cpath)) {

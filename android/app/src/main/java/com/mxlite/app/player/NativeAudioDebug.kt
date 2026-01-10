@@ -30,6 +30,8 @@ class NativeAudioDebug {
         private set
     
     private var pollJob: Job? = null
+    // Use Main dispatcher because mutableStateOf updates must be on main thread
+    // JNI calls are simple atomic reads with no blocking, so main thread is safe
     private val scope = CoroutineScope(Dispatchers.Main)
     
     /**

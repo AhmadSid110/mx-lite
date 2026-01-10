@@ -153,9 +153,7 @@ int AudioEngine::readPcm(int16_t* out, int frames) {
 }
 
 void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
-    int samples = frames * channelCount_;
-    
-    for (int i = 0; i < samples; ++i) {
+    for (int f = 0; f < frames; ++f) {
         int64_t write = writePos_.load();
         int64_t read = readPos_.load();
         
@@ -163,14 +161,16 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
         while ((write - read) >= ringFrames_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             read = readPos_.load();
+            write = writePos_.load();
         }
         
-        int64_t idx = (write * channelCount_ + (i % channelCount_)) % ring_.size();
-        ring_[idx] = in[i];
-        
-        if ((i + 1) % channelCount_ == 0) {
-            writePos_.fetch_add(1);
+        // Write all channels for this frame
+        for (int ch = 0; ch < channelCount_; ++ch) {
+            int64_t idx = (write * channelCount_ + ch) % ring_.size();
+            ring_[idx] = in[f * channelCount_ + ch];
         }
+        
+        writePos_.fetch_add(1);
     }
     
     // Update buffer fill
