@@ -10,14 +10,15 @@ JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_nativePlay(
         JNIEnv* env, jobject, jstring path) {
 
-    const char* cpath = env->GetStringUTFChars(path, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
 
-    delete gAudio;            // hard reset
-    gAudio = new AudioEngine(&gClock);
+    if (!gAudio)
+        gAudio = new AudioEngine(&gClock);
 
-    gAudio->open(cpath);      // 🔑 audio STARTS HERE
+    if (gAudio->open(p))
+        gAudio->start();
 
-    env->ReleaseStringUTFChars(path, cpath);
+    env->ReleaseStringUTFChars(path, p);
 }
 
 extern "C"
@@ -29,10 +30,18 @@ Java_com_mxlite_app_player_NativePlayer_nativeGetClockUs(
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_NativePlayer_nativeSeek(
+        JNIEnv*, jobject, jlong us) {
+    if (gAudio)
+        gAudio->seekUs(us);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_nativeStop(
         JNIEnv*, jobject) {
-    delete gAudio;
-    gAudio = nullptr;
+    if (gAudio)
+        gAudio->stop();
 }
 
 extern "C"
