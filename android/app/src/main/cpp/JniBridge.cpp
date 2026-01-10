@@ -1,21 +1,36 @@
 #include <jni.h>
+
 #include "player/AudioEngine.h"
 #include "player/Clock.h"
+#include "player/AudioDebug.h"
 
+/*
+ * Global singletons
+ */
 static Clock gClock;
 static AudioEngine* gAudio = nullptr;
 
-/* ───────────────────────── PLAY ───────────────────────── */
+/*
+ * Audio debug state (defined in AudioDebug.cpp)
+ */
+extern AudioDebug gAudioDebug;
+
+/* ───────────────────────────── */
+/* Playback control JNI */
+/* ───────────────────────────── */
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_nativePlay(
-        JNIEnv* env, jobject /*thiz*/, jstring path) {
+        JNIEnv* env,
+        jobject /*thiz*/,
+        jstring path) {
 
     const char* cpath = env->GetStringUTFChars(path, nullptr);
 
     if (!gAudio) {
         gAudio = new AudioEngine(&gClock);
+        gAudioDebug.engineCreated.store(true);
     }
 
     if (gAudio->open(cpath)) {
@@ -25,89 +40,106 @@ Java_com_mxlite_app_player_NativePlayer_nativePlay(
     env->ReleaseStringUTFChars(path, cpath);
 }
 
-/* ───────────────────────── CLOCK ───────────────────────── */
-
-extern "C"
-JNIEXPORT jlong JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeGetClockUs(
-        JNIEnv*, jobject /*thiz*/) {
-    return gClock.getUs();
-}
-
-/* ───────────────────────── SEEK ───────────────────────── */
-
-extern "C"
-JNIEXPORT void JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeSeek(
-        JNIEnv*, jobject /*thiz*/, jlong posUs) {
-
-    if (gAudio) {
-        gAudio->seekUs((int64_t) posUs);
-    }
-}
-
-/* ───────────────────────── STOP ───────────────────────── */
-
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_nativeStop(
-        JNIEnv*, jobject /*thiz*/) {
+        JNIEnv*,
+        jobject) {
 
     if (gAudio) {
         gAudio->stop();
     }
 }
 
-/* ───────────────────────── RELEASE ───────────────────────── */
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_NativePlayer_nativeSeek(
+        JNIEnv*,
+        jobject,
+        jlong posUs) {
+
+    if (gAudio) {
+        gAudio->seekUs((int64_t) posUs);
+    }
+}
 
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_nativeRelease(
-        JNIEnv*, jobject /*thiz*/) {
+        JNIEnv*,
+        jobject) {
 
     delete gAudio;
     gAudio = nullptr;
 }
 
-/* ───────────────────────── DEBUG API ───────────────────────── */
-/* These are READ-ONLY. No side effects. Safe to call from UI.   */
-
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeIsAAudioOpened(
-        JNIEnv*, jobject /*thiz*/) {
-
-    return (gAudio && gAudio->isAAudioOpened()) ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeIsAAudioStarted(
-        JNIEnv*, jobject /*thiz*/) {
-
-    return (gAudio && gAudio->isAAudioStarted()) ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C"
-JNIEXPORT jboolean JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeIsAudioCallbackRunning(
-        JNIEnv*, jobject /*thiz*/) {
-
-    return (gAudio && gAudio->isCallbackRunning()) ? JNI_TRUE : JNI_FALSE;
-}
+/* ───────────────────────────── */
+/* Clock JNI */
+/* ───────────────────────────── */
 
 extern "C"
 JNIEXPORT jlong JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeGetAudioCallbackCount(
-        JNIEnv*, jobject /*thiz*/) {
+Java_com_mxlite_app_player_NativePlayer_nativeGetClockUs(
+        JNIEnv*,
+        jobject) {
 
-    return gAudio ? gAudio->getCallbackCount() : 0;
+    return gClock.getUs();
+}
+
+/* ───────────────────────────── */
+/* 🔍 DEBUG / DIAGNOSTIC JNI */
+/* ───────────────────────────── */
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgEngineCreated(
+        JNIEnv*,
+        jobject) {
+
+    return gAudioDebug.engineCreated.load() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C"
-JNIEXPORT jlong JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeGetAudioFramesPlayed(
-        JNIEnv*, jobject /*thiz*/) {
+JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgAAudioOpened(
+        JNIEnv*,
+        jobject) {
 
-    return gAudio ? gAudio->getFramesPlayed() : 0;
+    return gAudioDebug.aaudioOpened.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgAAudioStarted(
+        JNIEnv*,
+        jobject) {
+
+    return gAudioDebug.aaudioStarted.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgCallbackCalled(
+        JNIEnv*,
+        jobject) {
+
+    return gAudioDebug.callbackCalled.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgDecoderProduced(
+        JNIEnv*,
+        jobject) {
+
+    return gAudioDebug.decoderProduced.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgBufferFill(
+        JNIEnv*,
+        jobject) {
+
+    return gAudioDebug.bufferFill.load();
 }
