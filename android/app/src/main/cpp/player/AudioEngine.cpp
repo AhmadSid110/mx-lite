@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 
+#include <aaudio/AAudio.h>
 #include <android/log.h>
 #include <vector>
 #include <cmath>
@@ -14,43 +15,108 @@ static inline int16_t floatToPcm16(float v) {
     return (int16_t)(v * 32767.f);
 }
 
+/* ====================================================== */
+/* AAudio callback */
+/* ====================================================== */
+
+static aaudio_data_callback_result_t audioCallback(
+        AAudioStream*,
+        void* user,
+        void* audioData,
+        int32_t frames) {
+
+    auto* self = static_cast<AudioEngine*>(user);
+    if (!self || !self->codec_) return AAUDIO_CALLBACK_RESULT_STOP;
+
+    int16_t* out = static_cast<int16_t*>(audioData);
+    int neededSamples = frames * self->channelCount_;
+    int written = 0;
+
+    AMediaCodecBufferInfo info;
+
+    while (written < neededSamples) {
+
+        ssize_t outIndex =
+                AMediaCodec_dequeueOutputBuffer(self->codec_, &info, 0);
+
+        if (outIndex < 0) break;
+
+        uint8_t* raw =
+                AMediaCodec_getOutputBuffer(self->codec_, outIndex, nullptr);
+
+        bool isFloat =
+                (info.size % (sizeof(float) * self->channelCount_)) == 0;
+
+        if (isFloat) {
+            float* f = reinterpret_cast<float*>(raw + info.offset);
+            int samples = info.size / sizeof(float);
+
+            for (int i = 0; i < samples && written < neededSamples; i++) {
+                out[written++] = floatToPcm16(f[i]);
+            }
+        } else {
+            int16_t* pcm = reinterpret_cast<int16_t*>(raw + info.offset);
+            int samples = info.size / sizeof(int16_t);
+
+            for (int i = 0; i < samples && written < neededSamples; i++) {
+                out[written++] = pcm[i];
+            }
+        }
+
+        AMediaCodec_releaseOutputBuffer(self->codec_, outIndex, false);
+    }
+
+    /* 🔑 MASTER CLOCK — HARDWARE PULL */
+    int64_t deltaUs =
+            (int64_t)frames * 1'000'000LL / self->sampleRate_;
+    self->clock_->addUs(deltaUs);
+
+    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+}
+
+/* ====================================================== */
+/* Lifecycle */
+/* ====================================================== */
+
 AudioEngine::AudioEngine(Clock* clock)
         : clock_(clock) {}
 
 AudioEngine::~AudioEngine() {
-    stop();
     cleanupCodec();
     cleanupAAudio();
 }
 
-/* ───────────────────────────── */
+/* ====================================================== */
 /* Open */
-/* ───────────────────────────── */
+/* ====================================================== */
 
 bool AudioEngine::open(const char* path) {
+
     extractor_ = AMediaExtractor_new();
     if (!extractor_) return false;
 
     if (AMediaExtractor_setDataSource(extractor_, path) != AMEDIA_OK)
         return false;
 
-    int audioTrack = -1;
-    for (size_t i = 0; i < AMediaExtractor_getTrackCount(extractor_); i++) {
+    int track = -1;
+    size_t count = AMediaExtractor_getTrackCount(extractor_);
+
+    for (size_t i = 0; i < count; i++) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
         const char* mime = nullptr;
         AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
 
         if (mime && !strncmp(mime, "audio/", 6)) {
             format_ = fmt;
-            audioTrack = (int)i;
+            track = (int)i;
             break;
         }
         AMediaFormat_delete(fmt);
     }
 
-    if (audioTrack < 0) return false;
+    if (track < 0) return false;
 
-    AMediaExtractor_selectTrack(extractor_, audioTrack);
+    AMediaExtractor_selectTrack(extractor_, track);
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sampleRate_);
     AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &channelCount_);
 
@@ -60,115 +126,42 @@ bool AudioEngine::open(const char* path) {
     codec_ = AMediaCodec_createDecoderByType(mime);
     if (!codec_) return false;
 
-    if (AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0) != AMEDIA_OK)
-        return false;
-
-    /* ---------- AAudio ---------- */
-
-    AAudioStreamBuilder* builder = nullptr;
-    AAudio_createStreamBuilder(&builder);
-
-    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
-    AAudioStreamBuilder_setChannelCount(builder, channelCount_);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
-
-    if (AAudioStreamBuilder_openStream(builder, &stream_) != AAUDIO_OK) {
-        AAudioStreamBuilder_delete(builder);
-        return false;
-    }
-
-    AAudioStreamBuilder_delete(builder);
-
+    AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0);
     AMediaCodec_start(codec_);
+
+    return setupAAudio();
+}
+
+/* ====================================================== */
+/* AAudio */
+/* ====================================================== */
+
+bool AudioEngine::setupAAudio() {
+
+    AAudioStreamBuilder* b = nullptr;
+    AAudio_createStreamBuilder(&b);
+
+    AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_OUTPUT);
+    AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
+    AAudioStreamBuilder_setSampleRate(b, sampleRate_);
+    AAudioStreamBuilder_setChannelCount(b, channelCount_);
+    AAudioStreamBuilder_setPerformanceMode(b,
+        AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setDataCallback(b, audioCallback, this);
+
+    if (AAudioStreamBuilder_openStream(b, &stream_) != AAUDIO_OK)
+        return false;
+
+    AAudioStreamBuilder_delete(b);
+    AAudioStream_requestStart(stream_);
+
+    LOGD("AAudio CALLBACK started");
     return true;
 }
 
-/* ───────────────────────────── */
-/* Start / Stop */
-/* ───────────────────────────── */
-
-void AudioEngine::start() {
-    running_ = true;
-    clock_->setUs(0);
-    AAudioStream_requestStart(stream_);
-}
-
-void AudioEngine::stop() {
-    running_ = false;
-    if (stream_)
-        AAudioStream_requestStop(stream_);
-}
-
-/* ───────────────────────────── */
-/* AAudio CALLBACK */
-/* ───────────────────────────── */
-
-aaudio_data_callback_result_t
-AudioEngine::audioCallback(
-        AAudioStream*,
-        void* userData,
-        void* audioData,
-        int32_t numFrames
-) {
-    return static_cast<AudioEngine*>(userData)
-            ->onAudioCallback(audioData, numFrames);
-}
-
-aaudio_data_callback_result_t
-AudioEngine::onAudioCallback(void* audioData, int32_t numFrames) {
-    if (!running_) {
-        memset(audioData, 0, numFrames * channelCount_ * sizeof(int16_t));
-        return AAUDIO_CALLBACK_RESULT_CONTINUE;
-    }
-
-    int16_t* out = (int16_t*)audioData;
-    int framesWritten = 0;
-
-    while (framesWritten < numFrames) {
-        AMediaCodecBufferInfo info;
-        ssize_t outIndex =
-                AMediaCodec_dequeueOutputBuffer(codec_, &info, 0);
-
-        if (outIndex < 0)
-            break;
-
-        uint8_t* raw =
-                AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
-
-        bool isFloat =
-                info.size % (sizeof(float) * channelCount_) == 0;
-
-        int samples = info.size / (isFloat ? 4 : 2);
-        int frames = samples / channelCount_;
-        int toCopy = std::min(frames, numFrames - framesWritten);
-
-        if (isFloat) {
-            float* f = (float*)(raw + info.offset);
-            for (int i = 0; i < toCopy * channelCount_; i++)
-                out[i] = floatToPcm16(f[i]);
-        } else {
-            memcpy(out, raw + info.offset,
-                   toCopy * channelCount_ * sizeof(int16_t));
-        }
-
-        out += toCopy * channelCount_;
-        framesWritten += toCopy;
-
-        AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
-    }
-
-    clock_->addUs(
-            (int64_t)framesWritten * 1'000'000LL / sampleRate_
-    );
-
-    return AAUDIO_CALLBACK_RESULT_CONTINUE;
-}
-
-/* ───────────────────────────── */
+/* ====================================================== */
 /* Cleanup */
-/* ───────────────────────────── */
+/* ====================================================== */
 
 void AudioEngine::cleanupCodec() {
     if (codec_) {
@@ -184,6 +177,7 @@ void AudioEngine::cleanupCodec() {
 
 void AudioEngine::cleanupAAudio() {
     if (stream_) {
+        AAudioStream_requestStop(stream_);
         AAudioStream_close(stream_);
         stream_ = nullptr;
     }
