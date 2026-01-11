@@ -172,9 +172,15 @@ void AudioEngine::start() {
     writePos_.store(0);
     readPos_.store(0);
 
-    AAudioStream_requestStart(stream_);
+    aaudio_result_t r = AAudioStream_requestStart(stream_);
 
-    if (AAudioStream_getState(stream_) == AAUDIO_STREAM_STATE_STARTED) {
+    if (r != AAUDIO_OK) {
+        gAudioDebug.aaudioError.store(r);
+        return;
+    }
+
+    aaudio_stream_state_t state = AAudioStream_getState(stream_);
+    if (state == AAUDIO_STREAM_STATE_STARTED) {
         gAudioDebug.aaudioStarted.store(true);
     }
 
@@ -224,10 +230,18 @@ bool AudioEngine::setupAAudio() {
         return false;
     }
 
-    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-    AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
-    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+        AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+        #if __ANDROID_API__ >= 28
+            AAudioStreamBuilder_setUsage(
+                builder, AAUDIO_USAGE_MEDIA);
+
+            AAudioStreamBuilder_setContentType(
+                builder, AAUDIO_CONTENT_TYPE_MOVIE);
+        #endif
+
+        AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
+        AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
+        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
     AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
 
     result = AAudioStreamBuilder_openStream(builder, &stream_);
