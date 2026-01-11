@@ -50,7 +50,9 @@ object NativePlayer {
         val focusResult = am.requestAudioFocus(focusRequest)
 
         if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            nativePlay(path)
+            val nativePath = NativeFileResolver.resolveToInternalPath(context, path)
+
+            nativePlay(nativePath)
         }
     }
 
