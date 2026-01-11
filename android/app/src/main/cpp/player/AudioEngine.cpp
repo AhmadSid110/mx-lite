@@ -146,8 +146,12 @@ void AudioEngine::seekUs(int64_t us) {
 bool AudioEngine::setupAAudio() {
     AAudioStreamBuilder* builder = nullptr;
 
-    if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK)
+    aaudio_result_t result = AAudio_createStreamBuilder(&builder);
+
+    if (result != AAUDIO_OK) {
+        gAudioDebug.aaudioError.store(result); // ✅ ADD
         return false;
+    }
 
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
@@ -157,12 +161,15 @@ bool AudioEngine::setupAAudio() {
     AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
     AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
 
-    if (AAudioStreamBuilder_openStream(builder, &stream_) != AAUDIO_OK) {
-        AAudioStreamBuilder_delete(builder);
+    result = AAudioStreamBuilder_openStream(builder, &stream_);
+
+    AAudioStreamBuilder_delete(builder);
+
+    if (result != AAUDIO_OK || !stream_) {
+        gAudioDebug.aaudioError.store(result); // ✅ ADD
         return false;
     }
 
-    AAudioStreamBuilder_delete(builder);
     gAudioDebug.aaudioOpened.store(true);
     return true;
 }

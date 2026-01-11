@@ -153,3 +153,10 @@ Java_com_mxlite_app_player_NativePlayer_dbgNativePlayCalled(
 
     return gAudioDebug.nativePlayCalled.load() ? JNI_TRUE : JNI_FALSE;
 }
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgAAudioError(
+        JNIEnv*, jobject) {
+    return gAudioDebug.aaudioError.load();
+}

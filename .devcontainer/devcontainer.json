@@ -1,0 +1,21 @@
+{
+  "name": "Android Dev (stable)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-22.04",
+
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {},
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "17"
+    }
+  },
+
+  "containerEnv": {
+    "ANDROID_HOME": "/opt/android-sdk",
+    "ANDROID_SDK_ROOT": "/opt/android-sdk",
+    "PATH": "/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  },
+
+  "postCreateCommand": "bash .devcontainer/setup-android.sh || (echo 'SDK setup failed — container kept alive'; sleep infinity)",
+
+  "remoteUser": "vscode"
+}
