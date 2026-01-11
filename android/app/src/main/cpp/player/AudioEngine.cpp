@@ -30,7 +30,7 @@ static inline int16_t floatToPcm16(float v) {
 AudioEngine::AudioEngine(Clock* clock)
         : clock_(clock) {
     gAudioDebug.engineCreated.store(true);
-    gAudioDebug.aaudioError.store(-111); // 👈 ADD THIS LINE
+    gAudioDebug.aaudioError.store(-111);
 }
 
 AudioEngine::~AudioEngine() {
