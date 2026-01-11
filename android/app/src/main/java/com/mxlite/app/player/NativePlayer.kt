@@ -1,6 +1,9 @@
 package com.mxlite.app.player
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.os.ParcelFileDescriptor
 import java.io.File
 
@@ -8,6 +11,9 @@ object NativePlayer {
     init {
         System.loadLibrary("mxplayer")
     }
+
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
 
     /* ================= JNI (PRIVATE) ================= */
 
@@ -25,23 +31,33 @@ object NativePlayer {
     /* ================= PUBLIC API ================= */
 
     fun play(context: Context, path: String) {
-        val file = File(path)
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        val pfd = ParcelFileDescriptor.open(
-            file,
-            ParcelFileDescriptor.MODE_READ_ONLY
-        )
+        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .build()
+            )
+            .setAcceptsDelayedFocusGain(false)
+            .setOnAudioFocusChangeListener { }
+            .build()
 
-        nativePlayFd(
-            pfd.fd,
-            0L,
-            pfd.statSize
-        )
+        audioManager = am
+        audioFocusRequest = focusRequest
 
-        // DO NOT close pfd yet (native uses it)
+        val focusResult = am.requestAudioFocus(focusRequest)
+
+        if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            nativePlay(path)
+        }
     }
 
     fun stop() {
+        audioFocusRequest?.let {
+            audioManager?.abandonAudioFocusRequest(it)
+        }
         nativeStop()
     }
 
