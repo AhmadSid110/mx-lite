@@ -292,22 +292,34 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
         int32_t numFrames) {
 
     auto* engine = static_cast<AudioEngine*>(userData);
+
+    // 🚨 HARD SAFETY GUARD — prevents native crash
+    if (!engine ||
+        engine->channelCount_ <= 0 ||
+        engine->sampleRate_ <= 0 ||
+        engine->ringFrames_ <= 0 ||
+        engine->ring_.empty()) {
+
+        memset(audioData, 0, numFrames * 2 * sizeof(int16_t));
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
+
     gAudioDebug.callbackCalled.store(true);
     gAudioDebug.callbackCount.fetch_add(1);
 
-    auto* out = (int16_t*)audioData;
-    int read = engine->readPcm(out, numFrames);
+    auto* out = static_cast<int16_t*>(audioData);
+    int framesRead = engine->readPcm(out, numFrames);
 
-    if (read < numFrames) {
-        memset(out + read * engine->channelCount_,
+    if (framesRead < numFrames) {
+        memset(out + framesRead * engine->channelCount_,
                0,
-               (numFrames - read) *
+               (numFrames - framesRead) *
                engine->channelCount_ * sizeof(int16_t));
     }
 
     if (engine->clock_) {
         engine->clock_->addUs(
-                (int64_t)numFrames * 1000000LL / engine->sampleRate_);
+            (int64_t)numFrames * 1000000LL / engine->sampleRate_);
     }
 
     return AAUDIO_CALLBACK_RESULT_CONTINUE;

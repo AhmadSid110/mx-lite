@@ -6,5 +6,5 @@ package com.mxlite.app.player
  */
 class NativeClock : PlaybackClock {
     override val positionMs: Long
-        get() = NativePlayer.nativeGetClockUs() / 1000
+    get() = NativePlayer.getClockUs() / 1000
 }

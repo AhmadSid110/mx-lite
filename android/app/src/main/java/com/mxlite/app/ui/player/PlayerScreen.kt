@@ -37,7 +37,7 @@ import com.mxlite.app.player.AudioTrackPrefsStore
 import com.mxlite.app.player.CodecInfoController
 import com.mxlite.app.player.TrackCodecInfo
 import com.mxlite.app.player.CodecCapability
-import com.mxlite.app.player.NativeAudioDebug
+// removed native debug polling; using AudioDebugOverlay composable
 import com.mxlite.app.subtitle.SubtitleController
 import com.mxlite.app.subtitle.SubtitleCue
 import com.mxlite.app.subtitle.SubtitlePrefsStore
@@ -113,19 +113,7 @@ fun PlayerScreen(
     var showUnsupportedCodecWarning by remember { mutableStateOf(false) }
     var unsupportedCodecs by remember { mutableStateOf<List<String>>(emptyList()) }
     
-    // Native audio debug state
-    val nativeDebug = remember { NativeAudioDebug() }
-    
-    // Start debug polling when screen appears
-    LaunchedEffect(Unit) {
-        nativeDebug.startPolling()
-    }
-    
-    DisposableEffect(Unit) {
-        onDispose {
-            nativeDebug.stopPolling()
-        }
-    }
+    // Native audio debug now displayed by AudioDebugOverlay
 
     val subtitlePicker =
         rememberLauncherForActivityResult(
@@ -383,7 +371,6 @@ fun PlayerScreen(
             
             // Debug overlay - always visible at top-left
             AudioDebugOverlay(
-                debugState = nativeDebug.state,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(16.dp)

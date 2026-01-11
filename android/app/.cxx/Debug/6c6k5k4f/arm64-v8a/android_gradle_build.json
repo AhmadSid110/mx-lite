@@ -1,0 +1,38 @@
+{
+  "buildFiles": [
+    "/workspaces/mx-lite/android/app/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/workspaces/mx-lite/android-sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/workspaces/mx-lite/android/app/.cxx/Debug/6c6k5k4f/arm64-v8a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/workspaces/mx-lite/android-sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/workspaces/mx-lite/android/app/.cxx/Debug/6c6k5k4f/arm64-v8a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "mxplayer::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "arm64-v8a",
+      "artifactName": "mxplayer",
+      "output": "/workspaces/mx-lite/android/app/build/intermediates/cxx/Debug/6c6k5k4f/obj/arm64-v8a/libmxplayer.so",
+      "runtimeFiles": []
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "/workspaces/mx-lite/android-sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/linux-x86_64/bin/clang.lld",
+      "cppCompilerExecutable": "/workspaces/mx-lite/android-sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++.lld"
+    }
+  },
+  "cFileExtensions": [],
+  "cppFileExtensions": [
+    "cpp"
+  ]
+}

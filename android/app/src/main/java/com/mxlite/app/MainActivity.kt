@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import com.mxlite.app.ui.AppRoot
 import com.mxlite.app.ui.PermissionWaitingScreen
+import com.mxlite.app.debug.CrashHandler
 
 class MainActivity : ComponentActivity() {
 
@@ -23,6 +24,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashHandler.install(this)
 
         setContent {
             if (permissionGranted) {
