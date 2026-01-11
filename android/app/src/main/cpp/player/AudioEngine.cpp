@@ -30,7 +30,6 @@ static inline int16_t floatToPcm16(float v) {
 AudioEngine::AudioEngine(Clock* clock)
         : clock_(clock) {
     gAudioDebug.engineCreated.store(true);
-    gAudioDebug.aaudioError.store(-111);
 }
 
 AudioEngine::~AudioEngine() {
@@ -42,6 +41,7 @@ AudioEngine::~AudioEngine() {
 /* ===================== Open ===================== */
 
 bool AudioEngine::open(const char* path) {
+
     extractor_ = AMediaExtractor_new();
     if (!extractor_) return false;
 
@@ -72,8 +72,6 @@ bool AudioEngine::open(const char* path) {
     }
 
     AMediaExtractor_selectTrack(extractor_, audioTrack);
-    AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sampleRate_);
-    AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &channelCount_);
 
     const char* mime = nullptr;
     AMediaFormat_getString(format_, AMEDIAFORMAT_KEY_MIME, &mime);
@@ -87,11 +85,13 @@ bool AudioEngine::open(const char* path) {
     if (AMediaCodec_start(codec_) != AMEDIA_OK)
         return false;
 
-    ringFrames_ = sampleRate_; // 1 second buffer
-    ring_.resize(ringFrames_ * channelCount_);
-
+    /* 🔑 IMPORTANT: setup AAudio FIRST */
     if (!setupAAudio())
         return false;
+
+    /* 🔑 Allocate ring buffer using ACTUAL device format */
+    ringFrames_ = sampleRate_; // 1 second buffer
+    ring_.resize(ringFrames_ * channelCount_);
 
     return true;
 }
@@ -106,6 +106,7 @@ void AudioEngine::start() {
     readPos_.store(0);
 
     AAudioStream_requestStart(stream_);
+
     if (AAudioStream_getState(stream_) == AAUDIO_STREAM_STATE_STARTED) {
         gAudioDebug.aaudioStarted.store(true);
     }
@@ -145,33 +146,34 @@ void AudioEngine::seekUs(int64_t us) {
 /* ===================== AAudio ===================== */
 
 bool AudioEngine::setupAAudio() {
-    gAudioDebug.aaudioError.store(-999); // 👈 PROBE
+
+    gAudioDebug.aaudioError.store(-999); // probe
 
     AAudioStreamBuilder* builder = nullptr;
-
     aaudio_result_t result = AAudio_createStreamBuilder(&builder);
 
     if (result != AAUDIO_OK) {
-        gAudioDebug.aaudioError.store(result); // ✅ ADD
+        gAudioDebug.aaudioError.store(result);
         return false;
     }
 
     AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
     AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-    AAudioStreamBuilder_setChannelCount(builder, channelCount_);
-    AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
     AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
 
     result = AAudioStreamBuilder_openStream(builder, &stream_);
-
     AAudioStreamBuilder_delete(builder);
 
     if (result != AAUDIO_OK || !stream_) {
-        gAudioDebug.aaudioError.store(result); // ✅ ADD
+        gAudioDebug.aaudioError.store(result);
         return false;
     }
+
+    /* 🔑 Read back ACTUAL hardware format */
+    sampleRate_   = AAudioStream_getSampleRate(stream_);
+    channelCount_ = AAudioStream_getChannelCount(stream_);
 
     gAudioDebug.aaudioOpened.store(true);
     return true;
@@ -244,6 +246,7 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
 /* ===================== MediaCodec Decode ===================== */
 
 void AudioEngine::decodeLoop() {
+
     AMediaCodecBufferInfo info;
     std::vector<int16_t> tmp;
 
@@ -269,6 +272,7 @@ void AudioEngine::decodeLoop() {
 
         ssize_t out = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
         if (out >= 0 && info.size > 0) {
+
             uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, out, nullptr);
 
             bool isFloat = (info.size % (sizeof(float) * channelCount_) == 0);
@@ -303,7 +307,6 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
 
     auto* engine = static_cast<AudioEngine*>(userData);
 
-    // 🚨 HARD SAFETY GUARD — prevents native crash
     if (!engine ||
         engine->channelCount_ <= 0 ||
         engine->sampleRate_ <= 0 ||
@@ -329,7 +332,7 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
 
     if (engine->clock_) {
         engine->clock_->addUs(
-            (int64_t)numFrames * 1000000LL / engine->sampleRate_);
+                (int64_t)numFrames * 1000000LL / engine->sampleRate_);
     }
 
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
