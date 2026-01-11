@@ -1,0 +1,1 @@
+/workspaces/mx-lite/android/app/src/main/cpp/CMakeLists.txt

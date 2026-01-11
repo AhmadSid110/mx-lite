@@ -26,6 +26,8 @@ Java_com_mxlite_app_player_NativePlayer_nativePlay(
         jobject /*thiz*/,
         jstring path) {
 
+    gAudioDebug.nativePlayCalled.store(true); // ✅ ADD THIS LINE
+
     const char* cpath = env->GetStringUTFChars(path, nullptr);
 
     if (!gAudio) {
@@ -141,4 +143,13 @@ Java_com_mxlite_app_player_NativePlayer_dbgBufferFill(
         jobject) {
 
     return gAudioDebug.bufferFill.load();
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgNativePlayCalled(
+        JNIEnv*,
+        jobject) {
+
+    return gAudioDebug.nativePlayCalled.load() ? JNI_TRUE : JNI_FALSE;
 }

@@ -8,6 +8,7 @@ aaudioOpened=${NativePlayer.dbgAAudioOpened()}
 aaudioStarted=${NativePlayer.dbgAAudioStarted()}
 callbackCalled=${NativePlayer.dbgCallbackCalled()}
 decoderProduced=${NativePlayer.dbgDecoderProduced()}
+nativePlayCalled=${NativePlayer.dbgNativePlayCalled()}
 bufferFill=${NativePlayer.dbgBufferFill()}
         """.trimIndent()
     }

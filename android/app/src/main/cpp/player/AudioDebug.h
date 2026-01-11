@@ -3,6 +3,8 @@
 #include <cstdint>
 
 struct AudioDebug {
+    std::atomic<bool> nativePlayCalled{false};   // ✅ ADD THIS
+
     // Lifecycle
     std::atomic<bool> engineCreated{false};
 

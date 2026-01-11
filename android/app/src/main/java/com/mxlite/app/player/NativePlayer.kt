@@ -44,5 +44,6 @@ object NativePlayer {
     external fun dbgAAudioStarted(): Boolean
     external fun dbgCallbackCalled(): Boolean
     external fun dbgDecoderProduced(): Boolean
+    external fun dbgNativePlayCalled(): Boolean
     external fun dbgBufferFill(): Int
 }
