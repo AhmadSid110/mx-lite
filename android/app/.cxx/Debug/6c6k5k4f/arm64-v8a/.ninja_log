@@ -1,6 +1,0 @@
-# ninja log v5
-3	520	1768127949713625245	CMakeFiles/mxplayer.dir/player/AudioDebug.cpp.o	3aa9abadec7c330c
-0	549	1768127949742625245	CMakeFiles/mxplayer.dir/player/Clock.cpp.o	24cb2cb541e0d032
-521	966	1768127950162625255	CMakeFiles/mxplayer.dir/JniBridge.cpp.o	1f1d292cf383d795
-3	1009	1768127950205625256	CMakeFiles/mxplayer.dir/player/AudioEngine.cpp.o	59b1fdefb65ec8f9
-1009	1234	1768127950426625260	/workspaces/mx-lite/android/app/build/intermediates/cxx/Debug/6c6k5k4f/obj/arm64-v8a/libmxplayer.so	7dcd013b0264be36
