@@ -1,3 +1,0 @@
-/workspaces/mx-lite/android/app/.cxx/Debug/6c6k5k4f/armeabi-v7a/CMakeFiles/mxplayer.dir
-/workspaces/mx-lite/android/app/.cxx/Debug/6c6k5k4f/armeabi-v7a/CMakeFiles/edit_cache.dir
-/workspaces/mx-lite/android/app/.cxx/Debug/6c6k5k4f/armeabi-v7a/CMakeFiles/rebuild_cache.dir
