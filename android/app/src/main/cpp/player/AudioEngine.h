@@ -17,6 +17,7 @@ public:
     ~AudioEngine();
 
     bool open(const char* path);
+    bool openFd(int fd, int64_t offset, int64_t length);
     void start();
     void stop();
     void seekUs(int64_t us);

@@ -99,6 +99,70 @@ bool AudioEngine::open(const char* path) {
     return true;
 }
 
+bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
+
+    gAudioDebug.openStage.store(1);
+
+    extractor_ = AMediaExtractor_new();
+    if (!extractor_) return false;
+
+    if (AMediaExtractor_setDataSourceFd(
+            extractor_,
+            fd,
+            offset,
+            length) != AMEDIA_OK) {
+        return false;
+    }
+
+    gAudioDebug.openStage.store(2);
+
+    int audioTrack = -1;
+    size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
+
+    for (size_t i = 0; i < trackCount; ++i) {
+        AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
+        const char* mime = nullptr;
+        AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
+
+        if (mime && !strncmp(mime, "audio/", 6)) {
+            format_ = fmt;
+            audioTrack = (int)i;
+            break;
+        }
+        AMediaFormat_delete(fmt);
+    }
+
+    if (audioTrack < 0) return false;
+
+    gAudioDebug.openStage.store(3);
+
+    AMediaExtractor_selectTrack(extractor_, audioTrack);
+
+    const char* mime = nullptr;
+    AMediaFormat_getString(format_, AMEDIAFORMAT_KEY_MIME, &mime);
+
+    codec_ = AMediaCodec_createDecoderByType(mime);
+    if (!codec_) return false;
+
+    gAudioDebug.openStage.store(4);
+
+    if (AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0) != AMEDIA_OK)
+        return false;
+
+    gAudioDebug.openStage.store(5);
+
+    if (AMediaCodec_start(codec_) != AMEDIA_OK)
+        return false;
+
+    gAudioDebug.openStage.store(6);
+
+    if (!setupAAudio()) return false;
+
+    gAudioDebug.openStage.store(7);
+
+    return true;
+}
+
 /* ===================== Start / Stop ===================== */
 
 void AudioEngine::start() {

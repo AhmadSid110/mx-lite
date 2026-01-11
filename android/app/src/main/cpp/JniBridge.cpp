@@ -43,6 +43,24 @@ Java_com_mxlite_app_player_NativePlayer_nativePlay(
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_NativePlayer_nativePlayFd(
+        JNIEnv*,
+        jobject,
+        jint fd,
+        jlong offset,
+        jlong length) {
+
+    if (!gAudio) {
+        gAudio = new AudioEngine(&gClock);
+    }
+
+    if (gAudio->openFd(fd, offset, length)) {
+        gAudio->start();
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_nativeStop(
         JNIEnv*,
         jobject) {

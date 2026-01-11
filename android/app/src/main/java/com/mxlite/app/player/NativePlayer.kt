@@ -1,6 +1,8 @@
 package com.mxlite.app.player
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
+import java.io.File
 
 object NativePlayer {
     init {
@@ -10,6 +12,11 @@ object NativePlayer {
     /* ================= JNI (PRIVATE) ================= */
 
     private external fun nativePlay(path: String)
+    private external fun nativePlayFd(
+        fd: Int,
+        offset: Long,
+        length: Long
+    )
     private external fun nativeStop()
     private external fun nativeSeek(positionUs: Long)
     private external fun nativeRelease()
@@ -18,7 +25,20 @@ object NativePlayer {
     /* ================= PUBLIC API ================= */
 
     fun play(context: Context, path: String) {
-        nativePlay(path)
+        val file = File(path)
+
+        val pfd = ParcelFileDescriptor.open(
+            file,
+            ParcelFileDescriptor.MODE_READ_ONLY
+        )
+
+        nativePlayFd(
+            pfd.fd,
+            0L,
+            pfd.statSize
+        )
+
+        // DO NOT close pfd yet (native uses it)
     }
 
     fun stop() {
