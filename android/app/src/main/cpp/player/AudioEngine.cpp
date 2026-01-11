@@ -144,6 +144,8 @@ void AudioEngine::seekUs(int64_t us) {
 /* ===================== AAudio ===================== */
 
 bool AudioEngine::setupAAudio() {
+    gAudioDebug.aaudioError.store(-999); // 👈 PROBE
+
     AAudioStreamBuilder* builder = nullptr;
 
     aaudio_result_t result = AAudio_createStreamBuilder(&builder);
