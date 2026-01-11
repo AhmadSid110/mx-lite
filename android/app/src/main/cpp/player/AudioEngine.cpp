@@ -41,14 +41,15 @@ AudioEngine::~AudioEngine() {
 /* ===================== Open ===================== */
 
 bool AudioEngine::open(const char* path) {
+    gAudioDebug.openStage.store(1);
 
     extractor_ = AMediaExtractor_new();
     if (!extractor_) return false;
 
     if (AMediaExtractor_setDataSource(extractor_, path) != AMEDIA_OK) {
-        LOGE("Extractor setDataSource failed");
         return false;
     }
+    gAudioDebug.openStage.store(2);
 
     int audioTrack = -1;
     size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
@@ -56,20 +57,22 @@ bool AudioEngine::open(const char* path) {
     for (size_t i = 0; i < trackCount; ++i) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
         const char* mime = nullptr;
-        AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
 
-        if (mime && !strncmp(mime, "audio/", 6)) {
+        if (AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime) &&
+            mime && !strncmp(mime, "audio/", 6)) {
+
             format_ = fmt;
             audioTrack = (int)i;
             break;
         }
+
         AMediaFormat_delete(fmt);
     }
 
     if (audioTrack < 0) {
-        LOGE("No audio track");
         return false;
     }
+    gAudioDebug.openStage.store(3);
 
     AMediaExtractor_selectTrack(extractor_, audioTrack);
 
@@ -78,20 +81,20 @@ bool AudioEngine::open(const char* path) {
 
     codec_ = AMediaCodec_createDecoderByType(mime);
     if (!codec_) return false;
+    gAudioDebug.openStage.store(4);
 
     if (AMediaCodec_configure(codec_, format_, nullptr, nullptr, 0) != AMEDIA_OK)
         return false;
+    gAudioDebug.openStage.store(5);
 
     if (AMediaCodec_start(codec_) != AMEDIA_OK)
         return false;
+    gAudioDebug.openStage.store(6);
 
-    /* 🔑 IMPORTANT: setup AAudio FIRST */
+    gAudioDebug.openStage.store(7);
+
     if (!setupAAudio())
         return false;
-
-    /* 🔑 Allocate ring buffer using ACTUAL device format */
-    ringFrames_ = sampleRate_; // 1 second buffer
-    ring_.resize(ringFrames_ * channelCount_);
 
     return true;
 }

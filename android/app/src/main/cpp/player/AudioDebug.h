@@ -12,6 +12,7 @@ struct AudioDebug {
     std::atomic<bool> aaudioOpened{false};
     std::atomic<bool> aaudioStarted{false};
     std::atomic<int> aaudioError{0};
+    std::atomic<int> openStage{0};
 
     // Callback health
     std::atomic<bool> callbackCalled{false};

@@ -160,3 +160,10 @@ Java_com_mxlite_app_player_NativePlayer_dbgAAudioError(
         JNIEnv*, jobject) {
     return gAudioDebug.aaudioError.load();
 }
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgOpenStage(
+        JNIEnv*, jobject) {
+    return gAudioDebug.openStage.load();
+}
