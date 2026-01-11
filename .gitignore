@@ -1,3 +1,16 @@
 .gradle/
 build/
+**/build/
 local.properties
+*.apk
+*.aab
+sdk/
+android-sdk/
+tools/
+platform-tools/
+node_modules/
+dist/
+.cache/
+.vscode/
+.DS_Store
+Thumbs.db
