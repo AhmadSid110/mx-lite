@@ -36,14 +36,15 @@ private:
     Clock* clock_ = nullptr;
 
     /* Threading */
-    std::atomic<bool> running_{false};
     std::thread decodeThread_;
+    std::atomic<bool> isPlaying_{false};
 
-    /* Ring buffer */
-    std::vector<int16_t> ring_;
-    int64_t ringFrames_ = 0;
-    std::atomic<int64_t> writePos_{0};
-    std::atomic<int64_t> readPos_{0};
+    /* ───────── Ring Buffer (lock-free) ───────── */
+    static constexpr int32_t kRingBufferSize = 192000;
+    int16_t ringBuffer_[kRingBufferSize];
+
+    std::atomic<int32_t> writeHead_{0};
+    std::atomic<int32_t> readHead_{0};
 
     /* Internal */
     bool setupAAudio();
@@ -53,6 +54,11 @@ private:
     void decodeLoop();
     void writePcmBlocking(const int16_t* in, int frames);
     int readPcm(int16_t* out, int frames);
+
+    /* ───────── Helpers ───────── */
+    void writeAudio(const int16_t* data, int32_t samples);
+    void renderAudio(int16_t* out, int32_t frames);
+     void flushRingBuffer();
 
     static aaudio_data_callback_result_t audioCallback(
             AAudioStream* stream,

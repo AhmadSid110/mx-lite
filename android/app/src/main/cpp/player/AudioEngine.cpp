@@ -193,36 +193,26 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 void AudioEngine::start() {
     if (!stream_) return;
 
-    aaudio_result_t result = AAudioStream_requestStart(stream_);
-    if (result != AAUDIO_OK) {
-        gAudioDebug.aaudioError.store(result);
+    aaudio_result_t res = AAudioStream_requestStart(stream_);
+    if (res != AAUDIO_OK) {
+        gAudioDebug.aaudioError.store(res);
         return;
     }
 
-    // Force a usable buffer size after starting — some devices default to 0
-    // which leaves the callback thread non-functional. Use 4x frames-per-burst.
-    int32_t frames = AAudioStream_getFramesPerBurst(stream_);
-    AAudioStream_setBufferSizeInFrames(stream_, frames * 4);
+    isPlaying_.store(true);
 
-#if __ANDROID_API__ < 28
-    // 🔁 API 26–27 fallback: poll state asynchronously
-    std::thread([this]() {
-        for (int i = 0; i < 50; ++i) { // ~500ms max
-            aaudio_stream_state_t state =
-                    AAudioStream_getState(stream_);
-            if (state == AAUDIO_STREAM_STATE_STARTED) {
-                gAudioDebug.aaudioStarted.store(true);
-                return;
-            }
-            std::this_thread::sleep_for(
-                    std::chrono::milliseconds(10));
-        }
-    }).detach();
-#endif
+    if (decodeThread_.joinable()) {
+        decodeThread_.join();
+    }
+
+    // reset heads before the decode thread starts to avoid delivering stale data
+    flushRingBuffer();
+
+    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
 void AudioEngine::stop() {
-    running_.store(false);
+    isPlaying_.store(false);
 
     if (decodeThread_.joinable())
         decodeThread_.join();
@@ -234,9 +224,8 @@ void AudioEngine::stop() {
 void AudioEngine::seekUs(int64_t us) {
     stop();
 
-    writePos_.store(0);
-    readPos_.store(0);
-    std::fill(ring_.begin(), ring_.end(), 0);
+    flushRingBuffer();
+    memset(ringBuffer_, 0, sizeof(ringBuffer_));
 
     if (clock_)
         clock_->setUs(us);
@@ -276,6 +265,8 @@ bool AudioEngine::setupAAudio() {
         AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
         AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
         AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+        AAudioStreamBuilder_setChannelCount(builder, 2);
+        AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
     AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
 #if __ANDROID_API__ >= 28
     AAudioStreamBuilder_setStateCallback(builder, aaudioStateCallback, nullptr);
@@ -308,6 +299,11 @@ void AudioEngine::cleanupAAudio() {
 }
 
 void AudioEngine::cleanupMedia() {
+    // Ensure decoder thread is stopped before touching MediaCodec
+    isPlaying_.store(false);
+    if (decodeThread_.joinable()) {
+        decodeThread_.join();
+    }
     if (codec_) {
         AMediaCodec_stop(codec_);
         AMediaCodec_delete(codec_);
@@ -326,110 +322,128 @@ void AudioEngine::cleanupMedia() {
 /* ===================== Ring Buffer ===================== */
 
 int AudioEngine::readPcm(int16_t* out, int frames) {
-    int64_t r = readPos_.load();
-    int64_t w = writePos_.load();
-    int64_t avail = w - r;
-    if (avail <= 0) return 0;
+    int32_t r = readHead_.load(std::memory_order_relaxed);
+    int32_t w = writeHead_.load(std::memory_order_acquire);
+    int32_t availSamples = w - r;
+    if (availSamples <= 0) return 0;
 
-    int n = (int)std::min<int64_t>(frames, avail);
+    int32_t availFrames = availSamples / channelCount_;
+    int n = std::min<int32_t>(frames, availFrames);
 
     for (int f = 0; f < n; ++f) {
-        size_t base = ((r + f) % ringFrames_) * channelCount_;
-        memcpy(out + f * channelCount_,
-               &ring_[base],
-               channelCount_ * sizeof(int16_t));
+        int32_t base = (r + f * channelCount_) % kRingBufferSize;
+        for (int c = 0; c < channelCount_; ++c) {
+            out[f * channelCount_ + c] = ringBuffer_[(base + c) % kRingBufferSize];
+        }
     }
 
-    readPos_.store(r + n);
-    gAudioDebug.bufferFill.store(w - (r + n));
+    readHead_.store(r + n * channelCount_, std::memory_order_release);
+    gAudioDebug.bufferFill.store((w - (r + n * channelCount_)) / channelCount_);
     return n;
 }
 
 void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
-    for (int f = 0; f < frames && running_.load(); ++f) {
-        while ((writePos_.load() - readPos_.load()) >= ringFrames_) {
+    for (int f = 0; f < frames && isPlaying_.load(); ++f) {
+        while ((writeHead_.load() - readHead_.load()) >= kRingBufferSize) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
-        int64_t w = writePos_.load();
-        size_t base = (w % ringFrames_) * channelCount_;
+        int32_t w = writeHead_.load();
+        int32_t base = w % kRingBufferSize;
 
-        memcpy(&ring_[base],
-               in + f * channelCount_,
-               channelCount_ * sizeof(int16_t));
+        for (int c = 0; c < channelCount_; ++c) {
+            ringBuffer_[(base + c) % kRingBufferSize] = in[f * channelCount_ + c];
+        }
 
-        writePos_.fetch_add(1);
+        writeHead_.fetch_add(channelCount_);
     }
 
-    gAudioDebug.bufferFill.store(writePos_.load() - readPos_.load());
+    gAudioDebug.bufferFill.store((writeHead_.load() - readHead_.load()) / channelCount_);
 }
 
 /* ===================== MediaCodec Decode ===================== */
 
 void AudioEngine::decodeLoop() {
+    while (isPlaying_.load()) {
+        AMediaCodecBufferInfo info{};
+        ssize_t index = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
 
-    AMediaCodecBufferInfo info;
-    std::vector<int16_t> tmp;
+        if (index >= 0) {
+            uint8_t* buf = AMediaCodec_getOutputBuffer(codec_, index, nullptr);
 
-    while (running_.load()) {
+            if (buf && info.size > 0) {
+                const int16_t* samples =
+                    reinterpret_cast<int16_t*>(buf + info.offset);
 
-        ssize_t in = AMediaCodec_dequeueInputBuffer(codec_, 2000);
-        if (in >= 0) {
-            size_t cap;
-            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, in, &cap);
-            ssize_t sz = AMediaExtractor_readSampleData(extractor_, buf, cap);
-
-            if (sz < 0) {
-                AMediaCodec_queueInputBuffer(
-                        codec_, in, 0, 0, 0,
-                        AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
-            } else {
-                AMediaCodec_queueInputBuffer(
-                        codec_, in, 0, sz,
-                        AMediaExtractor_getSampleTime(extractor_), 0);
-                AMediaExtractor_advance(extractor_);
+                int32_t count = info.size / sizeof(int16_t);
+                writeAudio(samples, count);
             }
+
+            AMediaCodec_releaseOutputBuffer(codec_, index, false);
         }
-
-        ssize_t out = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
-        if (out >= 0 && info.size > 0) {
-
-            uint8_t* raw = AMediaCodec_getOutputBuffer(codec_, out, nullptr);
-
-            bool isFloat = (info.size % (sizeof(float) * channelCount_) == 0);
-            int samples = info.size / (isFloat ? sizeof(float) : sizeof(int16_t));
-            int frames = samples / channelCount_;
-
-            tmp.resize(samples);
-
-            if (isFloat) {
-                float* f = (float*)(raw + info.offset);
-                for (int i = 0; i < samples; ++i)
-                    tmp[i] = floatToPcm16(f[i]);
-            } else {
-                memcpy(tmp.data(), raw + info.offset, info.size);
-            }
-
-            gAudioDebug.decoderProduced.store(true);
-            writePcmBlocking(tmp.data(), frames);
-
-            AMediaCodec_releaseOutputBuffer(codec_, out, false);
+        else if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+            AMediaFormat* newFormat = AMediaCodec_getOutputFormat(codec_);
+            AMediaFormat_delete(newFormat);
+        }
+        else if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
+}
+
+/* ===================== Producer (lock-free) ===================== */
+
+void AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
+    int32_t w = writeHead_.load(std::memory_order_relaxed);
+    int32_t r = readHead_.load(std::memory_order_acquire);
+
+    int32_t available = kRingBufferSize - (w - r);
+    int32_t toWrite = std::min(available, samples);
+
+    for (int i = 0; i < toWrite; ++i) {
+        ringBuffer_[(w + i) % kRingBufferSize] = data[i];
+    }
+
+    writeHead_.store(w + toWrite, std::memory_order_release);
+}
+
+void AudioEngine::renderAudio(int16_t* out, int32_t frames) {
+    int32_t samplesNeeded = frames * 2; // stereo
+    int32_t r = readHead_.load(std::memory_order_relaxed);
+    int32_t w = writeHead_.load(std::memory_order_acquire);
+
+    int32_t available = w - r;
+    int32_t toRead = std::min(available, samplesNeeded);
+
+    for (int i = 0; i < toRead; ++i) {
+        out[i] = ringBuffer_[(r + i) % kRingBufferSize];
+    }
+
+    for (int i = toRead; i < samplesNeeded; ++i) {
+        out[i] = 0; // underrun → silence
+    }
+
+    readHead_.store(r + toRead, std::memory_order_release);
+}
+
+void AudioEngine::flushRingBuffer() {
+    readHead_.store(0);
+    writeHead_.store(0);
 }
 
 /* ===================== AAudio Callback ===================== */
 
 aaudio_data_callback_result_t AudioEngine::audioCallback(
         AAudioStream*,
-        void*,
+        void* userData,
         void* audioData,
         int32_t numFrames) {
 
-    gAudioDebug.callbackCalled.store(true);
+        auto* engine = static_cast<AudioEngine*>(userData);
+        auto* out = static_cast<int16_t*>(audioData);
 
-    // Touch memory to force fault if callback fires
-    ((int16_t*)audioData)[0] = 0;
+        engine->renderAudio(out, numFrames);
 
-    return AAUDIO_CALLBACK_RESULT_CONTINUE;
-}
+        gAudioDebug.callbackCalled.store(true);
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
