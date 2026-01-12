@@ -31,28 +31,25 @@ object NativePlayer {
     /* ================= PUBLIC API ================= */
 
     fun play(context: Context, path: String) {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        try {
+            val file = File(path)
 
-        val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                    .build()
+            val pfd = ParcelFileDescriptor.open(
+                file,
+                ParcelFileDescriptor.MODE_READ_ONLY
             )
-            .setAcceptsDelayedFocusGain(false)
-            .setOnAudioFocusChangeListener { }
-            .build()
 
-        audioManager = am
-        audioFocusRequest = focusRequest
+            nativePlayFd(
+                pfd.fd,
+                0L,
+                pfd.statSize
+            )
 
-        val focusResult = am.requestAudioFocus(focusRequest)
+            // ❗ DO NOT close pfd here
+            // Native side dup()'d it
 
-        if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            val nativePath = NativeFileResolver.resolveToInternalPath(context, path)
-
-            nativePlay(nativePath)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 

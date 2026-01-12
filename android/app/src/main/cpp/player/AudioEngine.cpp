@@ -10,6 +10,7 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <unistd.h>
 
 #define LOG_TAG "AudioEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -101,38 +102,49 @@ bool AudioEngine::open(const char* path) {
 
 bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 
+    // 🔐 CRITICAL: duplicate fd so GC / Java cannot close it
+    int dupFd = dup(fd);
+    if (dupFd < 0) {
+        return false;
+    }
+
     gAudioDebug.openStage.store(1);
 
     extractor_ = AMediaExtractor_new();
-    if (!extractor_) return false;
+    if (!extractor_) {
+        close(dupFd);
+        return false;
+    }
 
     if (AMediaExtractor_setDataSourceFd(
-            extractor_,
-            fd,
-            offset,
-            length) != AMEDIA_OK) {
+            extractor_, dupFd, offset, length) != AMEDIA_OK) {
+        close(dupFd);
         return false;
     }
 
     gAudioDebug.openStage.store(2);
 
+    // ─── Find audio track ───
     int audioTrack = -1;
     size_t trackCount = AMediaExtractor_getTrackCount(extractor_);
 
     for (size_t i = 0; i < trackCount; ++i) {
         AMediaFormat* fmt = AMediaExtractor_getTrackFormat(extractor_, i);
         const char* mime = nullptr;
-        AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
 
-        if (mime && !strncmp(mime, "audio/", 6)) {
-            format_ = fmt;
-            audioTrack = (int)i;
-            break;
+        if (AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime)) {
+            if (mime && !strncmp(mime, "audio/", 6)) {
+                format_ = fmt;
+                audioTrack = (int)i;
+                break;
+            }
         }
         AMediaFormat_delete(fmt);
     }
 
-    if (audioTrack < 0) return false;
+    if (audioTrack < 0) {
+        return false;
+    }
 
     gAudioDebug.openStage.store(3);
 
@@ -156,10 +168,10 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 
     gAudioDebug.openStage.store(6);
 
-    if (!setupAAudio()) return false;
+    if (!setupAAudio())
+        return false;
 
     gAudioDebug.openStage.store(7);
-
     return true;
 }
 
