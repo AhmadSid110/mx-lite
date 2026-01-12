@@ -365,6 +365,38 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
 
 void AudioEngine::decodeLoop() {
     while (isPlaying_.load()) {
+        // ---- FEED INPUT ----
+        ssize_t inIndex = AMediaCodec_dequeueInputBuffer(codec_, 0);
+        if (inIndex >= 0) {
+            size_t bufSize = 0;
+            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, inIndex, &bufSize);
+
+            ssize_t sampleSize = AMediaExtractor_readSampleData(extractor_, buf, bufSize);
+
+            if (sampleSize > 0) {
+                int64_t pts = AMediaExtractor_getSampleTime(extractor_);
+                AMediaCodec_queueInputBuffer(
+                    codec_,
+                    inIndex,
+                    0,
+                    sampleSize,
+                    pts,
+                    0
+                );
+                AMediaExtractor_advance(extractor_);
+            } else {
+                // End of stream
+                AMediaCodec_queueInputBuffer(
+                    codec_,
+                    inIndex,
+                    0,
+                    0,
+                    0,
+                    AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
+                );
+            }
+        }
+
         AMediaCodecBufferInfo info{};
         ssize_t index = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
 
