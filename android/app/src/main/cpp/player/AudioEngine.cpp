@@ -199,6 +199,11 @@ void AudioEngine::start() {
         return;
     }
 
+    // Force a usable buffer size after starting — some devices default to 0
+    // which leaves the callback thread non-functional. Use 4x frames-per-burst.
+    int32_t frames = AAudioStream_getFramesPerBurst(stream_);
+    AAudioStream_setBufferSizeInFrames(stream_, frames * 4);
+
 #if __ANDROID_API__ < 28
     // 🔁 API 26–27 fallback: poll state asynchronously
     std::thread([this]() {
@@ -275,6 +280,9 @@ bool AudioEngine::setupAAudio() {
 #if __ANDROID_API__ >= 28
     AAudioStreamBuilder_setStateCallback(builder, aaudioStateCallback, nullptr);
 #endif
+
+    // Force callback scheduling (critical on many OEM devices)
+    AAudioStreamBuilder_setFramesPerDataCallback(builder, 192);
 
     result = AAudioStreamBuilder_openStream(builder, &stream_);
     AAudioStreamBuilder_delete(builder);
@@ -414,39 +422,14 @@ void AudioEngine::decodeLoop() {
 
 aaudio_data_callback_result_t AudioEngine::audioCallback(
         AAudioStream*,
-        void* userData,
+        void*,
         void* audioData,
         int32_t numFrames) {
 
-    auto* engine = static_cast<AudioEngine*>(userData);
-
-    if (!engine ||
-        engine->channelCount_ <= 0 ||
-        engine->sampleRate_ <= 0 ||
-        engine->ringFrames_ <= 0 ||
-        engine->ring_.empty()) {
-
-        memset(audioData, 0, numFrames * 2 * sizeof(int16_t));
-        return AAUDIO_CALLBACK_RESULT_CONTINUE;
-    }
-
     gAudioDebug.callbackCalled.store(true);
-    gAudioDebug.callbackCount.fetch_add(1);
 
-    auto* out = static_cast<int16_t*>(audioData);
-    int framesRead = engine->readPcm(out, numFrames);
-
-    if (framesRead < numFrames) {
-        memset(out + framesRead * engine->channelCount_,
-               0,
-               (numFrames - framesRead) *
-               engine->channelCount_ * sizeof(int16_t));
-    }
-
-    if (engine->clock_) {
-        engine->clock_->addUs(
-                (int64_t)numFrames * 1000000LL / engine->sampleRate_);
-    }
+    // Touch memory to force fault if callback fires
+    ((int16_t*)audioData)[0] = 0;
 
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }

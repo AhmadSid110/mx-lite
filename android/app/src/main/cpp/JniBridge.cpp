@@ -88,8 +88,12 @@ Java_com_mxlite_app_player_NativePlayer_nativeRelease(
         JNIEnv*,
         jobject) {
 
-    delete gAudio;
-    gAudio = nullptr;
+    if (gAudio) {
+        // Ensure stream is stopped before deleting to avoid dangling callbacks
+        gAudio->stop();
+        delete gAudio;
+        gAudio = nullptr;
+    }
 }
 
 /* ───────────────────────────── */
