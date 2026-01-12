@@ -18,6 +18,19 @@
 
 extern AudioDebug gAudioDebug;
 
+#if __ANDROID_API__ >= 28
+static void aaudioStateCallback(
+        AAudioStream*,
+        void*,
+        aaudio_stream_state_t state,
+        aaudio_stream_state_t /*prev*/) {
+
+    if (state == AAUDIO_STREAM_STATE_STARTED) {
+        gAudioDebug.aaudioStarted.store(true);
+    }
+}
+#endif
+
 /* ===================== PCM helper ===================== */
 
 static inline int16_t floatToPcm16(float v) {
@@ -180,23 +193,27 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 void AudioEngine::start() {
     if (!stream_) return;
 
-    running_.store(true);
-    writePos_.store(0);
-    readPos_.store(0);
-
-    aaudio_result_t r = AAudioStream_requestStart(stream_);
-
-    if (r != AAUDIO_OK) {
-        gAudioDebug.aaudioError.store(r);
+    aaudio_result_t result = AAudioStream_requestStart(stream_);
+    if (result != AAUDIO_OK) {
+        gAudioDebug.aaudioError.store(result);
         return;
     }
 
-    aaudio_stream_state_t state = AAudioStream_getState(stream_);
-    if (state == AAUDIO_STREAM_STATE_STARTED) {
-        gAudioDebug.aaudioStarted.store(true);
-    }
-
-    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
+#if __ANDROID_API__ < 28
+    // 🔁 API 26–27 fallback: poll state asynchronously
+    std::thread([this]() {
+        for (int i = 0; i < 50; ++i) { // ~500ms max
+            aaudio_stream_state_t state =
+                    AAudioStream_getState(stream_);
+            if (state == AAUDIO_STREAM_STATE_STARTED) {
+                gAudioDebug.aaudioStarted.store(true);
+                return;
+            }
+            std::this_thread::sleep_for(
+                    std::chrono::milliseconds(10));
+        }
+    }).detach();
+#endif
 }
 
 void AudioEngine::stop() {
@@ -255,6 +272,9 @@ bool AudioEngine::setupAAudio() {
         AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
         AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
     AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
+#if __ANDROID_API__ >= 28
+    AAudioStreamBuilder_setStateCallback(builder, aaudioStateCallback, nullptr);
+#endif
 
     result = AAudioStreamBuilder_openStream(builder, &stream_);
     AAudioStreamBuilder_delete(builder);
