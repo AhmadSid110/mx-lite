@@ -205,6 +205,16 @@ void AudioEngine::start() {
     decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
+void AudioEngine::pause() {
+    isPlaying_.store(false);
+
+    if (decodeThread_.joinable())
+        decodeThread_.join();
+
+    if (stream_)
+        AAudioStream_requestStop(stream_);
+}
+
 void AudioEngine::stop() {
     isPlaying_.store(false);
 

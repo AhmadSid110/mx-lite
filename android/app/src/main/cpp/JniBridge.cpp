@@ -96,6 +96,24 @@ Java_com_mxlite_app_player_NativePlayer_nativeRelease(
     }
 }
 
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_NativePlayer_nativePause(
+        JNIEnv*,
+        jobject) {
+
+    if (gAudio) gAudio->pause();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_NativePlayer_nativeResume(
+        JNIEnv*,
+        jobject) {
+
+    if (gAudio) gAudio->start();
+}
+
 /* ───────────────────────────── */
 /* Clock JNI */
 /* ───────────────────────────── */

@@ -211,7 +211,18 @@ class MediaCodecEngine(
         videoRunning = true
 
         // Restart decode thread for video
+        startDecodeThread()
+    }
+
+    private fun startDecodeThread() {
         decodeThread = thread(name = "video-decode") { decodeLoop() }
+    }
+
+    fun resume() {
+        if (videoRunning) return
+        suppressRenderUntilAudioCatchup = true
+        videoRunning = true
+        startDecodeThread()
     }
 
     override fun release() {

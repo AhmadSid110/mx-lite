@@ -90,6 +90,8 @@ fun PlayerScreen(
 
     var userSeeking by remember { mutableStateOf(false) }
     var seekPositionMs by remember { mutableStateOf(0L) }
+    var sliderPosition by remember { mutableStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
 
     var subtitleController by remember { mutableStateOf<SubtitleController?>(null) }
     var subtitleOffsetMs by remember { mutableStateOf(0L) }
@@ -384,20 +386,27 @@ fun PlayerScreen(
                     .padding(16.dp)
             ) {
 
+                var displayDuration = durationMs.coerceAtLeast(1L)
+
                 Slider(
-                    value = if (durationMs > 0)
-                        (if (userSeeking) seekPositionMs else positionMs).toFloat()
-                    else 0f,
+                    value = sliderPosition,
                     onValueChange = {
-                        userSeeking = true
-                        seekPositionMs = it.toLong()
+                        isDragging = true
+                        sliderPosition = it
                     },
                     onValueChangeFinished = {
-                        engine.seekTo(seekPositionMs)
-                        userSeeking = false
-                    },
-                    valueRange = 0f..maxOf(durationMs.toFloat(), 1f)
+                        val seekMs = (sliderPosition * engine.durationMs).toLong()
+                        engine.seekTo(seekMs)
+                        isDragging = false
+                    }
                 )
+
+                LaunchedEffect(engine.currentPositionMs) {
+                    if (!isDragging && engine.durationMs > 0) {
+                        sliderPosition =
+                            engine.currentPositionMs.toFloat() / engine.durationMs
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
