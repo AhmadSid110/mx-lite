@@ -21,12 +21,14 @@ extern AudioDebug gAudioDebug;
 #if __ANDROID_API__ >= 28
 static void aaudioStateCallback(
         AAudioStream*,
-        void*,
+        void* userData,
         aaudio_stream_state_t state,
-        aaudio_stream_state_t /*prev*/) {
+        aaudio_stream_state_t /* previous */) {
+
+    auto* engine = static_cast<AudioEngine*>(userData);
 
     if (state == AAUDIO_STREAM_STATE_STARTED) {
-        gAudioDebug.aaudioStarted.store(true);
+        engine->aaudioStarted_.store(true, std::memory_order_release);
     }
 }
 #endif
@@ -193,21 +195,30 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 void AudioEngine::start() {
     if (!stream_) return;
 
-    aaudio_result_t res = AAudioStream_requestStart(stream_);
-    if (res != AAUDIO_OK) {
-        gAudioDebug.aaudioError.store(res);
+    aaudioStarted_.store(false);
+
+    aaudio_result_t result = AAudioStream_requestStart(stream_);
+    if (result != AAUDIO_OK) {
+        gAudioDebug.aaudioError.store(result);
         return;
     }
 
-    isPlaying_.store(true);
-
-    if (decodeThread_.joinable()) {
-        decodeThread_.join();
+    // 🔴 CRITICAL: wait for STARTED
+    for (int i = 0; i < 50; i++) { // max ~500ms
+        if (aaudioStarted_.load(std::memory_order_acquire)) {
+            gAudioDebug.aaudioStarted.store(true);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // reset heads before the decode thread starts to avoid delivering stale data
-    flushRingBuffer();
+    if (!aaudioStarted_.load()) {
+        gAudioDebug.aaudioError.store(-998); // start timeout
+        return;
+    }
 
+    // Only now is audio actually running
+    isPlaying_.store(true);
     decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
@@ -275,7 +286,7 @@ bool AudioEngine::setupAAudio() {
         AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
     AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
 #if __ANDROID_API__ >= 28
-    AAudioStreamBuilder_setStateCallback(builder, aaudioStateCallback, nullptr);
+    AAudioStreamBuilder_setStateCallback(builder, aaudioStateCallback, this);
 #endif
 
     // Force callback scheduling (critical on many OEM devices)

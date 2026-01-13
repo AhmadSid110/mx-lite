@@ -39,6 +39,7 @@ private:
     /* Threading */
     std::thread decodeThread_;
     std::atomic<bool> isPlaying_{false};
+    std::atomic<bool> aaudioStarted_{false};
 
     /* ───────── Ring Buffer (lock-free) ───────── */
     static constexpr int32_t kRingBufferSize = 192000;
