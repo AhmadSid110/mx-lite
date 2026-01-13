@@ -195,30 +195,13 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 void AudioEngine::start() {
     if (!stream_) return;
 
-    aaudioStarted_.store(false);
+    AAudioStream_requestStart(stream_);
 
-    aaudio_result_t result = AAudioStream_requestStart(stream_);
-    if (result != AAUDIO_OK) {
-        gAudioDebug.aaudioError.store(result);
-        return;
-    }
-
-    // 🔴 CRITICAL: wait for STARTED
-    for (int i = 0; i < 50; i++) { // max ~500ms
-        if (aaudioStarted_.load(std::memory_order_acquire)) {
-            gAudioDebug.aaudioStarted.store(true);
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    if (!aaudioStarted_.load()) {
-        gAudioDebug.aaudioError.store(-998); // start timeout
-        return;
-    }
-
-    // Only now is audio actually running
     isPlaying_.store(true);
+
+    if (decodeThread_.joinable()) {
+        decodeThread_.join();
+    }
     decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
@@ -270,27 +253,20 @@ bool AudioEngine::setupAAudio() {
         return false;
     }
 
-        AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
-        #if __ANDROID_API__ >= 28
-            AAudioStreamBuilder_setUsage(
-                builder, AAUDIO_USAGE_MEDIA);
+    // Configure builder: PCM 16-bit, hardware values will be read back later
+    AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+    AAudioStreamBuilder_setChannelCount(builder, channelCount_);
+    AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
 
-            AAudioStreamBuilder_setContentType(
-                builder, AAUDIO_CONTENT_TYPE_MOVIE);
-        #endif
+    AAudioStreamBuilder_setSharingMode(
+        builder, AAUDIO_SHARING_MODE_SHARED);
 
-        AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
-        AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
-        AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
-        AAudioStreamBuilder_setChannelCount(builder, 2);
-        AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
-    AAudioStreamBuilder_setDataCallback(builder, audioCallback, this);
-#if __ANDROID_API__ >= 28
-    AAudioStreamBuilder_setStateCallback(builder, aaudioStateCallback, this);
-#endif
+    AAudioStreamBuilder_setPerformanceMode(
+        builder, AAUDIO_PERFORMANCE_MODE_NONE);
 
-    // Force callback scheduling (critical on many OEM devices)
-    AAudioStreamBuilder_setFramesPerDataCallback(builder, 192);
+    // VERY IMPORTANT: use data callback for delivery
+    AAudioStreamBuilder_setDataCallback(
+        builder, audioCallback, this);
 
     result = AAudioStreamBuilder_openStream(builder, &stream_);
     AAudioStreamBuilder_delete(builder);
@@ -392,79 +368,65 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
 
 void AudioEngine::decodeLoop() {
     while (isPlaying_.load()) {
-        // ---- FEED INPUT ----
+
+        // =============================
+        // INPUT STAGE (MANDATORY)
+        // =============================
         ssize_t inIndex = AMediaCodec_dequeueInputBuffer(codec_, 0);
         if (inIndex >= 0) {
-            size_t bufSize = 0;
-            uint8_t* buf = AMediaCodec_getInputBuffer(codec_, inIndex, &bufSize);
+            size_t bufSize;
+            uint8_t* buf =
+                AMediaCodec_getInputBuffer(codec_, inIndex, &bufSize);
 
-            ssize_t sampleSize = AMediaExtractor_readSampleData(extractor_, buf, bufSize);
+            if (buf) {
+                ssize_t size =
+                    AMediaExtractor_readSampleData(extractor_, buf, bufSize);
 
-            if (sampleSize > 0) {
-                int64_t pts = AMediaExtractor_getSampleTime(extractor_);
-                AMediaCodec_queueInputBuffer(
-                    codec_,
-                    inIndex,
-                    0,
-                    sampleSize,
-                    pts,
-                    0
-                );
-                AMediaExtractor_advance(extractor_);
-            } else {
-                // End of stream
-                AMediaCodec_queueInputBuffer(
-                    codec_,
-                    inIndex,
-                    0,
-                    0,
-                    0,
-                    AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
-                );
+                if (size > 0) {
+                    int64_t pts =
+                        AMediaExtractor_getSampleTime(extractor_);
+                    AMediaCodec_queueInputBuffer(
+                        codec_, inIndex, 0, size, pts, 0);
+                    AMediaExtractor_advance(extractor_);
+                } else {
+                    AMediaCodec_queueInputBuffer(
+                        codec_, inIndex, 0, 0, 0,
+                        AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
+                }
             }
         }
 
-        AMediaCodecBufferInfo info{};
-        ssize_t index = AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
+        // =============================
+        // OUTPUT STAGE
+        // =============================
+        AMediaCodecBufferInfo info;
+        ssize_t outIndex =
+            AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
 
-        if (index >= 0) {
-            uint8_t* buf = AMediaCodec_getOutputBuffer(codec_, index, nullptr);
+        if (outIndex >= 0) {
+            uint8_t* buf =
+                AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
 
             if (buf && info.size > 0) {
                 int16_t* samples =
                     reinterpret_cast<int16_t*>(buf + info.offset);
-                int count = info.size / sizeof(int16_t);
 
-                bool written = false;
+                int32_t count = info.size / sizeof(int16_t);
 
-                while (isPlaying_.load(std::memory_order_acquire)) {
-                    if (writeAudio(samples, count)) {
-                        written = true;
-                        break; // ✅ success
-                    }
-
-                    // 🟡 buffer full → wait for audio callback to consume
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
-
-                    // 🛑 SAFETY: if audio stopped, do not deadlock
-                    if (!gAudioDebug.aaudioStarted.load()) {
-                        break;
-                    }
-                }
-
-                if (written) {
-                    gAudioDebug.decoderProduced.store(true);
+                // BACKPRESSURE
+                while (isPlaying_.load()) {
+                    if (writeAudio(samples, count)) break;
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(2));
                 }
             }
 
-            AMediaCodec_releaseOutputBuffer(codec_, index, false);
+            AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
         }
-        else if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
-            AMediaFormat* newFormat = AMediaCodec_getOutputFormat(codec_);
-            AMediaFormat_delete(newFormat);
-        }
-        else if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        else if (outIndex ==
+                 AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(2));
         }
     }
 }
@@ -539,7 +501,9 @@ int64_t AudioEngine::getClockUs() const {
         return 0;
     }
 
-    return timeNs / 1000;
+    if (sampleRate_ <= 0) return 0;
+    // Convert frame position to microseconds: (frames / sampleRate) * 1e6
+    return (framePos * 1000000LL) / sampleRate_;
 }
 
 int32_t AudioEngine::framesToSamples(int32_t frames) const {
