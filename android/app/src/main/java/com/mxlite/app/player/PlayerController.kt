@@ -20,7 +20,11 @@ class PlayerController(
         get() = video.durationMs
 
     override val currentPositionMs: Long
-        get() = NativePlayer.getClockUs() / 1000
+        get() = if (hasAudio) {
+            NativePlayer.getClockUs() / 1000
+        } else {
+            video.currentPositionMs
+        }
 
     override val isPlaying: Boolean
         get() = video.isPlaying

@@ -20,6 +20,9 @@ class MediaCodecEngine(
     private var decodeThread: Thread? = null
     private var lastRenderedPtsUs: Long = Long.MIN_VALUE
     private var suppressRenderUntilAudioCatchup = false
+    private var videoStartNano: Long = 0L
+    private var firstVideoPtsUs: Long = Long.MIN_VALUE
+    private var hasAudio: Boolean = false
 
     override var durationMs: Long = 0
         private set
@@ -47,6 +50,20 @@ class MediaCodecEngine(
             setDataSource(file.absolutePath)
         }
 
+        // Detect whether the file contains an audio track
+        hasAudio = run {
+            var found = false
+            for (i in 0 until extractor!!.trackCount) {
+                val fmt = extractor!!.getTrackFormat(i)
+                val m = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                if (m.startsWith("audio/")) {
+                    found = true
+                    break
+                }
+            }
+            found
+        }
+
         val trackIndex = selectVideoTrack(extractor!!)
         extractor!!.selectTrack(trackIndex)
 
@@ -63,6 +80,10 @@ class MediaCodecEngine(
             configure(format, surface, null, 0)
             start()
         }
+
+        // Initialize video clock
+        videoStartNano = System.nanoTime()
+        firstVideoPtsUs = Long.MIN_VALUE
 
         // START DECODE THREAD
         decodeThread = Thread { decodeLoop() }
@@ -95,13 +116,27 @@ class MediaCodecEngine(
             val outIndex = codec!!.dequeueOutputBuffer(info, 10_000)
 
             if (outIndex >= 0) {
-                val audioUs = NativePlayer.getClockUs()
-                if (audioUs <= 0) {
-                    codec!!.releaseOutputBuffer(outIndex, false)
-                    continue
-                }
+                    val framePtsUs = info.presentationTimeUs
 
-                val diffUs = info.presentationTimeUs - audioUs
+                    val audioUs = if (hasAudio) {
+                        NativePlayer.getClockUs()
+                    } else {
+                        // 🔥 VIDEO-ONLY FALLBACK CLOCK
+                        if (firstVideoPtsUs == Long.MIN_VALUE) {
+                            firstVideoPtsUs = framePtsUs
+                            videoStartNano = System.nanoTime()
+                        }
+
+                        val elapsedUs = (System.nanoTime() - videoStartNano) / 1000
+                        firstVideoPtsUs + elapsedUs
+                    }
+
+                    if (audioUs <= 0) {
+                        codec!!.releaseOutputBuffer(outIndex, false)
+                        continue
+                    }
+
+                    val diffUs = framePtsUs - audioUs
 
                 if (suppressRenderUntilAudioCatchup) {
                     if (info.presentationTimeUs > audioUs) {
