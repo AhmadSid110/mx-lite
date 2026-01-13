@@ -56,7 +56,7 @@ private:
     int readPcm(int16_t* out, int frames);
 
     /* ───────── Helpers ───────── */
-    void writeAudio(const int16_t* data, int32_t samples);
+    bool writeAudio(const int16_t* data, int32_t samples);
     void renderAudio(int16_t* out, int32_t frames);
      void flushRingBuffer();
 

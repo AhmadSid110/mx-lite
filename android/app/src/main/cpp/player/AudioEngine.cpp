@@ -404,11 +404,30 @@ void AudioEngine::decodeLoop() {
             uint8_t* buf = AMediaCodec_getOutputBuffer(codec_, index, nullptr);
 
             if (buf && info.size > 0) {
-                const int16_t* samples =
+                int16_t* samples =
                     reinterpret_cast<int16_t*>(buf + info.offset);
+                int count = info.size / sizeof(int16_t);
 
-                int32_t count = info.size / sizeof(int16_t);
-                writeAudio(samples, count);
+                bool written = false;
+
+                while (isPlaying_.load(std::memory_order_acquire)) {
+                    if (writeAudio(samples, count)) {
+                        written = true;
+                        break; // ✅ success
+                    }
+
+                    // 🟡 buffer full → wait for audio callback to consume
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+                    // 🛑 SAFETY: if audio stopped, do not deadlock
+                    if (!gAudioDebug.aaudioStarted.load()) {
+                        break;
+                    }
+                }
+
+                if (written) {
+                    gAudioDebug.decoderProduced.store(true);
+                }
             }
 
             AMediaCodec_releaseOutputBuffer(codec_, index, false);
@@ -425,37 +444,47 @@ void AudioEngine::decodeLoop() {
 
 /* ===================== Producer (lock-free) ===================== */
 
-void AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
-    int32_t w = writeHead_.load(std::memory_order_relaxed);
-    int32_t r = readHead_.load(std::memory_order_acquire);
+bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
+    int32_t head = writeHead_.load(std::memory_order_acquire);
+    int32_t tail = readHead_.load(std::memory_order_acquire);
 
-    int32_t available = kRingBufferSize - (w - r);
-    int32_t toWrite = std::min(available, samples);
+    int32_t used = head - tail;
+    int32_t available = kRingBufferSize - used;
 
-    for (int i = 0; i < toWrite; ++i) {
-        ringBuffer_[(w + i) % kRingBufferSize] = data[i];
+    // 🔴 DO NOT DROP AUDIO DURING PLAYBACK
+    if (available < samples) {
+        return false; // buffer full
     }
 
-    writeHead_.store(w + toWrite, std::memory_order_release);
+    for (int32_t i = 0; i < samples; i++) {
+        ringBuffer_[head % kRingBufferSize] = data[i];
+        head++;
+    }
+
+    writeHead_.store(head, std::memory_order_release);
+    return true;
 }
 
 void AudioEngine::renderAudio(int16_t* out, int32_t frames) {
-    int32_t samplesNeeded = frames * 2; // stereo
-    int32_t r = readHead_.load(std::memory_order_relaxed);
-    int32_t w = writeHead_.load(std::memory_order_acquire);
+    int32_t samples = frames * 2; // stereo
 
-    int32_t available = w - r;
-    int32_t toRead = std::min(available, samplesNeeded);
+    int32_t head = writeHead_.load(std::memory_order_acquire);
+    int32_t tail = readHead_.load(std::memory_order_acquire);
+    int32_t available = head - tail;
 
-    for (int i = 0; i < toRead; ++i) {
-        out[i] = ringBuffer_[(r + i) % kRingBufferSize];
+    int32_t toRead = std::min(samples, available);
+
+    for (int i = 0; i < toRead; i++) {
+        out[i] = ringBuffer_[tail % kRingBufferSize];
+        tail++;
     }
 
-    for (int i = toRead; i < samplesNeeded; ++i) {
-        out[i] = 0; // underrun → silence
+    // 🔇 Fill silence on underrun
+    for (int i = toRead; i < samples; i++) {
+        out[i] = 0;
     }
 
-    readHead_.store(r + toRead, std::memory_order_release);
+    readHead_.store(tail, std::memory_order_release);
 }
 
 void AudioEngine::flushRingBuffer() {
