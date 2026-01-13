@@ -70,90 +70,58 @@ class MediaCodecEngine(
     }
 
     private fun decodeLoop() {
-        val codec = codec ?: return
-        val extractor = extractor ?: return
-        val info = MediaCodec.BufferInfo()
+        while (videoRunning) {
 
-        while (running) {
-
-            // ───── INPUT ─────
-            val inIndex = codec.dequeueInputBuffer(10_000)
+            // INPUT (never blocked)
+            val inIndex = codec?.dequeueInputBuffer(0) ?: break
             if (inIndex >= 0) {
-                val buffer = codec.getInputBuffer(inIndex)!!
-                val size = extractor.readSampleData(buffer, 0)
+                val inputBuffer = codec?.getInputBuffer(inIndex)
+                val size = extractor?.readSampleData(inputBuffer!!, 0) ?: -1
 
-                if (size < 0) {
-                    codec.queueInputBuffer(
-                        inIndex,
-                        0,
-                        0,
-                        0,
+                if (size > 0) {
+                    val pts = extractor!!.sampleTime
+                    codec!!.queueInputBuffer(inIndex, 0, size, pts, 0)
+                    extractor!!.advance()
+                } else {
+                    codec!!.queueInputBuffer(
+                        inIndex, 0, 0, 0,
                         MediaCodec.BUFFER_FLAG_END_OF_STREAM
                     )
-                } else {
-                    codec.queueInputBuffer(
-                        inIndex,
-                        0,
-                        size,
-                        extractor.sampleTime,
-                        0
-                    )
-                    extractor.advance()
                 }
             }
 
-            // ───── OUTPUT ─────
-            val outIndex = codec.dequeueOutputBuffer(info, 10_000)
+            // OUTPUT (sync gated)
+            val info = MediaCodec.BufferInfo()
+            val outIndex = codec!!.dequeueOutputBuffer(info, 10_000)
 
             if (outIndex >= 0) {
-
-                if (!videoRunning) {
-                    codec.releaseOutputBuffer(outIndex, false)
-                    continue
-                }
-
-                val framePtsUs = info.presentationTimeUs
-
                 val audioUs = NativePlayer.getClockUs()
-                if (audioUs <= 0L) {
-                    codec.releaseOutputBuffer(outIndex, false)
+                if (audioUs <= 0) {
+                    codec!!.releaseOutputBuffer(outIndex, false)
                     continue
                 }
 
-                val diffUs = framePtsUs - audioUs
+                val diffUs = info.presentationTimeUs - audioUs
 
-                // ------------------------------------------------
-                // SUPPRESS FIRST FRAMES AFTER SEEK / PLAY
-                // ------------------------------------------------
                 if (suppressRenderUntilAudioCatchup) {
-                    if (framePtsUs > audioUs) {
-                        codec.releaseOutputBuffer(outIndex, false)
+                    if (info.presentationTimeUs > audioUs) {
+                        codec!!.releaseOutputBuffer(outIndex, false)
                         continue
-                    } else {
-                        suppressRenderUntilAudioCatchup = false
                     }
+                    suppressRenderUntilAudioCatchup = false
                 }
 
-                // ------------------------------------------------
-                // VIDEO AHEAD → WAIT
-                // ------------------------------------------------
-                if (diffUs > 15_000) { // 15ms guard
-                    Thread.sleep(diffUs / 1000)
-                    codec.releaseOutputBuffer(outIndex, true)
-                }
-
-                // ------------------------------------------------
-                // VIDEO TOO LATE → DROP
-                // ------------------------------------------------
-                else if (diffUs < -50_000) { // > 1 frame late
-                    codec.releaseOutputBuffer(outIndex, false)
-                }
-
-                // ------------------------------------------------
-                // IN SYNC → RENDER
-                // ------------------------------------------------
-                else {
-                    codec.releaseOutputBuffer(outIndex, true)
+                when {
+                    diffUs > 15_000 -> {
+                        Thread.sleep(diffUs / 1000)
+                        codec!!.releaseOutputBuffer(outIndex, true)
+                    }
+                    diffUs < -50_000 -> {
+                        codec!!.releaseOutputBuffer(outIndex, false)
+                    }
+                    else -> {
+                        codec!!.releaseOutputBuffer(outIndex, true)
+                    }
                 }
             }
         }
@@ -163,22 +131,26 @@ class MediaCodecEngine(
         for (i in 0 until extractor.trackCount) {
             val format = extractor.getTrackFormat(i)
             val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-            if (mime.startsWith("video/")) return i
+            if (mime.startsWith("video/")) {
+                return i
+            }
         }
-        error("No video track found")
+        return -1
     }
 
     override fun pause() {
-        running = false
+        // Pause video only: stop decode thread and rendering
         videoRunning = false
+
+        try {
+            decodeThread?.join()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     override fun seekTo(positionMs: Long) {
-        // STOP VIDEO BEFORE SEEK
-        val wasRunning = running
-        running = false
-
-        // ensure rendering is disabled immediately
+        // STOP VIDEO THREAD BEFORE SEEK (video-only)
         videoRunning = false
 
         try {
@@ -190,12 +162,8 @@ class MediaCodecEngine(
         // FLUSH VIDEO CODEC — invalidates old frames and clears output queue
         codec?.flush()
 
-        // RESET VIDEO TIMING STATE
+        // RESET VIDEO TIMING STATE — avoid reusing old PTS
         lastRenderedPtsUs = Long.MIN_VALUE
-
-        // re-enable rendering only after flush; suppress until audio catches up
-        videoRunning = true
-        suppressRenderUntilAudioCatchup = true
 
         // SEEK VIDEO EXTRACTOR (must match audio seek target)
         extractor?.seekTo(
@@ -203,11 +171,12 @@ class MediaCodecEngine(
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
 
-        // Restart decode thread only if it was running.
-        if (wasRunning) {
-            running = true
-            decodeThread = thread(name = "video-decode") { decodeLoop() }
-        }
+        // re-enable rendering only after flush; suppress until audio catches up
+        suppressRenderUntilAudioCatchup = true
+        videoRunning = true
+
+        // Restart decode thread for video
+        decodeThread = thread(name = "video-decode") { decodeLoop() }
     }
 
     override fun release() {
