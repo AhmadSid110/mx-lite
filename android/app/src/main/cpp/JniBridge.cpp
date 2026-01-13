@@ -106,7 +106,11 @@ Java_com_mxlite_app_player_NativePlayer_nativeGetClockUs(
         JNIEnv*,
         jobject) {
 
-    return gClock.getUs();
+    if (gAudio) {
+        return gAudio->getClockUs();
+    }
+
+    return 0;
 }
 
 /* ───────────────────────────── */

@@ -14,12 +14,9 @@ class AudioCodecEngine : PlaybackClock {
     private var sampleRate = 44100
     private var playing = false
 
-    // 🔑 MASTER CLOCK (PTS-BASED — CORRECT)
-    @Volatile
-    private var lastPtsUs: Long = 0L
-
+    // 🔑 MASTER CLOCK: use native AAudio hardware timestamp
     override val positionMs: Long
-        get() = lastPtsUs / 1000
+        get() = NativePlayer.getClockUs() / 1000
 
     /* ───────── Public API ───────── */
 
@@ -43,7 +40,7 @@ class AudioCodecEngine : PlaybackClock {
     fun play(file: File) {
         release()
         playing = true
-        lastPtsUs = 0L
+        // native clock will drive playback position
 
         extractor = MediaExtractor().apply {
             setDataSource(file.absolutePath)
@@ -105,15 +102,13 @@ class AudioCodecEngine : PlaybackClock {
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
 
-        lastPtsUs = positionMs * 1000
-
         audioTrack?.pause()
         audioTrack?.flush()
         audioTrack?.play()
     }
 
     fun reset() {
-        lastPtsUs = 0L
+        // native clock remains authoritative
         audioTrack?.pause()
         audioTrack?.flush()
     }
@@ -129,7 +124,7 @@ class AudioCodecEngine : PlaybackClock {
         codec = null
         extractor = null
         audioTrack = null
-        lastPtsUs = 0L
+        // native clock remains authoritative
     }
 
     /* ───────── Decode Loop ───────── */
@@ -177,10 +172,7 @@ class AudioCodecEngine : PlaybackClock {
 
                 track.write(data, 0, data.size)
 
-                // 🔑 UPDATE MASTER CLOCK FROM PTS
-                if (info.presentationTimeUs > 0) {
-                    lastPtsUs = info.presentationTimeUs
-                }
+                // Decoder PTS is metadata only; do not update master clock here.
 
                 codec.releaseOutputBuffer(outIndex, false)
             }

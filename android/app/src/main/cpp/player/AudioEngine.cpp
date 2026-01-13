@@ -222,21 +222,27 @@ void AudioEngine::stop() {
 }
 
 void AudioEngine::seekUs(int64_t us) {
-    stop();
+    // One-time sync on seek: reset decoder/state but do NOT update any clock.
 
+    // Stop audio delivery briefly so we can flush buffers safely.
+    if (stream_)
+        AAudioStream_requestStop(stream_);
+
+    // Clear ring buffer to avoid delivering stale audio after seek
     flushRingBuffer();
     memset(ringBuffer_, 0, sizeof(ringBuffer_));
 
-    if (clock_)
-        clock_->setUs(us);
-
+    // Move extractor to requested position
     if (extractor_)
         AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
 
+    // Flush decoder state
     if (codec_)
         AMediaCodec_flush(codec_);
 
-    start();
+    // Restart audio delivery. Do NOT set or modify any software clock here.
+    if (stream_)
+        AAudioStream_requestStart(stream_);
 }
 
 /* ===================== AAudio ===================== */
@@ -490,6 +496,23 @@ void AudioEngine::renderAudio(int16_t* out, int32_t frames) {
 void AudioEngine::flushRingBuffer() {
     readHead_.store(0);
     writeHead_.store(0);
+}
+
+int64_t AudioEngine::getClockUs() const {
+    if (!stream_) return 0;
+
+    int64_t framePos = 0;
+    int64_t timeNs = 0;
+
+    if (AAudioStream_getTimestamp(
+            stream_,
+            CLOCK_MONOTONIC,
+            &framePos,
+            &timeNs) != AAUDIO_OK) {
+        return 0;
+    }
+
+    return timeNs / 1000;
 }
 
 /* ===================== AAudio Callback ===================== */

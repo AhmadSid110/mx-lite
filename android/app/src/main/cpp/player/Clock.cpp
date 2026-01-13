@@ -1,13 +1,10 @@
+// Clock neutralized: implementations intentionally left empty.
 #include "Clock.h"
 
-void Clock::setUs(int64_t us) {
-    ptsUs_.store(us, std::memory_order_relaxed);
-}
+// No-op implementations to avoid software timing authority.
 
-void Clock::addUs(int64_t deltaUs) {
-    ptsUs_.fetch_add(deltaUs, std::memory_order_relaxed);
-}
+void Clock::setUs(int64_t) {}
 
-int64_t Clock::getUs() const {
-    return ptsUs_.load(std::memory_order_relaxed);
-}
+void Clock::addUs(int64_t) {}
+
+int64_t Clock::getUs() const { return 0; }

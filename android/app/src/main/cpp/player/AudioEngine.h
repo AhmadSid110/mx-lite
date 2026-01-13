@@ -21,6 +21,7 @@ public:
     void start();
     void stop();
     void seekUs(int64_t us);
+    int64_t getClockUs() const;
 
 private:
     /* Media */
