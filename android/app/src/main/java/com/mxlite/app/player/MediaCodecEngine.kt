@@ -16,6 +16,9 @@ class MediaCodecEngine(
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
     private var running = false
+    private var decodeThread: Thread? = null
+    private var lastRenderedPtsUs: Long = Long.MIN_VALUE
+    private var suppressRenderUntilAudioCatchup: Boolean = false
 
     override var durationMs: Long = 0
         private set
@@ -33,6 +36,10 @@ class MediaCodecEngine(
     override fun play(file: File) {
         release()
         running = true
+
+        // RESET VIDEO STATE
+        lastRenderedPtsUs = Long.MIN_VALUE
+        suppressRenderUntilAudioCatchup = true
 
         extractor = MediaExtractor().apply {
             setDataSource(file.absolutePath)
@@ -55,9 +62,9 @@ class MediaCodecEngine(
             start()
         }
 
-        thread(name = "video-decode") {
-            decodeLoop()
-        }
+        // START DECODE THREAD
+        decodeThread = Thread { decodeLoop() }
+        decodeThread?.start()
     }
 
     private fun decodeLoop() {
@@ -95,34 +102,66 @@ class MediaCodecEngine(
 
             // ───── OUTPUT ─────
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
-            if (outIndex < 0) continue
 
-            val videoPtsMs = info.presentationTimeUs / 1000
-            val audioMs = clock.positionMs
+            if (outIndex >= 0) {
+                val videoPtsUs = info.presentationTimeUs
+                val audioUs = NativePlayer.getClockUs()
 
-            // Audio not started yet → fallback to video PTS
-            val masterMs =
-                if (audioMs > 0) audioMs else videoPtsMs
-
-            val delta = videoPtsMs - masterMs
-
-            when {
-                // Video early → short sleep
-                delta > 15 -> {
-                    Thread.sleep(min(delta, 10))
-                }
-
-                // Video late → drop frame
-                delta < -40 -> {
+                // Edge Case B: audio clock can be 0 briefly after start/seek — do not render
+                if (audioUs <= 0L) {
+                    // release without rendering and continue waiting
                     codec.releaseOutputBuffer(outIndex, false)
                     continue
                 }
-            }
 
-            codec.releaseOutputBuffer(outIndex, true)
+                val diffUs = videoPtsUs - audioUs
 
-            if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                break
+                // --------------------------------------------------
+                // CASE 1: VIDEO TOO EARLY → WAIT (poll audio clock)
+                // --------------------------------------------------
+                if (diffUs > 0) {
+                    while (running) {
+                        val audioNow = NativePlayer.getClockUs()
+                        val remaining = videoPtsUs - audioNow
+
+                        if (remaining <= 0) {
+                            codec.releaseOutputBuffer(outIndex, true)
+                            suppressRenderUntilAudioCatchup = false
+                            break
+                        }
+
+                        if (remaining < -40_000) {
+                            // Became late while waiting — drop
+                            codec.releaseOutputBuffer(outIndex, false)
+                            suppressRenderUntilAudioCatchup = false
+                            break
+                        }
+
+                        Thread.sleep(1)
+                    }
+                }
+
+                // --------------------------------------------------
+                // CASE 2: VIDEO TOO LATE → DROP
+                // --------------------------------------------------
+                else if (diffUs < -40_000) {
+                    codec.releaseOutputBuffer(outIndex, false)
+                    suppressRenderUntilAudioCatchup = false
+                }
+
+                // --------------------------------------------------
+                // CASE 3: IN SYNC → RENDER (but ensure post-seek check)
+                // --------------------------------------------------
+                else {
+                    if (suppressRenderUntilAudioCatchup) {
+                        // Wait until audio clock reaches the frame PTS
+                        while (running && NativePlayer.getClockUs() < videoPtsUs) {
+                            Thread.sleep(1)
+                        }
+                        suppressRenderUntilAudioCatchup = false
+                    }
+                    codec.releaseOutputBuffer(outIndex, true)
+                }
             }
         }
     }
@@ -141,10 +180,35 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
+        // STOP VIDEO BEFORE SEEK
+        val wasRunning = running
+        running = false
+
+        try {
+            decodeThread?.join()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+
+        // FLUSH VIDEO CODEC — invalidates old frames and clears output queue
+        codec?.flush()
+
+        // RESET VIDEO TIMING STATE
+        lastRenderedPtsUs = Long.MIN_VALUE
+        // Ensure we don't render immediately after seek; wait for audio clock
+        suppressRenderUntilAudioCatchup = true
+
+        // SEEK VIDEO EXTRACTOR (must match audio seek target)
         extractor?.seekTo(
             positionMs * 1000,
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
+
+        // Do NOT render immediately after this. Restart decode thread only if it was running.
+        if (wasRunning) {
+            running = true
+            decodeThread = thread(name = "video-decode") { decodeLoop() }
+        }
     }
 
     override fun release() {
