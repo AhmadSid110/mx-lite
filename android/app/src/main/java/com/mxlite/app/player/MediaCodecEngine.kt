@@ -16,9 +16,10 @@ class MediaCodecEngine(
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
     private var running = false
+    private var videoRunning = false
     private var decodeThread: Thread? = null
     private var lastRenderedPtsUs: Long = Long.MIN_VALUE
-    private var suppressRenderUntilAudioCatchup: Boolean = false
+    private var suppressRenderUntilAudioCatchup = false
 
     override var durationMs: Long = 0
         private set
@@ -40,6 +41,7 @@ class MediaCodecEngine(
         // RESET VIDEO STATE
         lastRenderedPtsUs = Long.MIN_VALUE
         suppressRenderUntilAudioCatchup = true
+        videoRunning = true
 
         extractor = MediaExtractor().apply {
             setDataSource(file.absolutePath)
@@ -104,62 +106,53 @@ class MediaCodecEngine(
             val outIndex = codec.dequeueOutputBuffer(info, 10_000)
 
             if (outIndex >= 0) {
-                val videoPtsUs = info.presentationTimeUs
-                val audioUs = NativePlayer.getClockUs()
 
-                // Edge Case B: audio clock can be 0 briefly after start/seek — do not render
-                if (audioUs <= 0L) {
-                    // release without rendering and continue waiting
+                if (!videoRunning) {
                     codec.releaseOutputBuffer(outIndex, false)
                     continue
                 }
 
-                val diffUs = videoPtsUs - audioUs
+                val framePtsUs = info.presentationTimeUs
 
-                // --------------------------------------------------
-                // CASE 1: VIDEO TOO EARLY → WAIT (poll audio clock)
-                // --------------------------------------------------
-                if (diffUs > 0) {
-                    while (running) {
-                        val audioNow = NativePlayer.getClockUs()
-                        val remaining = videoPtsUs - audioNow
-
-                        if (remaining <= 0) {
-                            codec.releaseOutputBuffer(outIndex, true)
-                            suppressRenderUntilAudioCatchup = false
-                            break
-                        }
-
-                        if (remaining < -40_000) {
-                            // Became late while waiting — drop
-                            codec.releaseOutputBuffer(outIndex, false)
-                            suppressRenderUntilAudioCatchup = false
-                            break
-                        }
-
-                        Thread.sleep(1)
-                    }
-                }
-
-                // --------------------------------------------------
-                // CASE 2: VIDEO TOO LATE → DROP
-                // --------------------------------------------------
-                else if (diffUs < -40_000) {
+                val audioUs = NativePlayer.getClockUs()
+                if (audioUs <= 0L) {
                     codec.releaseOutputBuffer(outIndex, false)
-                    suppressRenderUntilAudioCatchup = false
+                    continue
                 }
 
-                // --------------------------------------------------
-                // CASE 3: IN SYNC → RENDER (but ensure post-seek check)
-                // --------------------------------------------------
-                else {
-                    if (suppressRenderUntilAudioCatchup) {
-                        // Wait until audio clock reaches the frame PTS
-                        while (running && NativePlayer.getClockUs() < videoPtsUs) {
-                            Thread.sleep(1)
-                        }
+                val diffUs = framePtsUs - audioUs
+
+                // ------------------------------------------------
+                // SUPPRESS FIRST FRAMES AFTER SEEK / PLAY
+                // ------------------------------------------------
+                if (suppressRenderUntilAudioCatchup) {
+                    if (framePtsUs > audioUs) {
+                        codec.releaseOutputBuffer(outIndex, false)
+                        continue
+                    } else {
                         suppressRenderUntilAudioCatchup = false
                     }
+                }
+
+                // ------------------------------------------------
+                // VIDEO AHEAD → WAIT
+                // ------------------------------------------------
+                if (diffUs > 15_000) { // 15ms guard
+                    Thread.sleep(diffUs / 1000)
+                    codec.releaseOutputBuffer(outIndex, true)
+                }
+
+                // ------------------------------------------------
+                // VIDEO TOO LATE → DROP
+                // ------------------------------------------------
+                else if (diffUs < -50_000) { // > 1 frame late
+                    codec.releaseOutputBuffer(outIndex, false)
+                }
+
+                // ------------------------------------------------
+                // IN SYNC → RENDER
+                // ------------------------------------------------
+                else {
                     codec.releaseOutputBuffer(outIndex, true)
                 }
             }
@@ -177,12 +170,16 @@ class MediaCodecEngine(
 
     override fun pause() {
         running = false
+        videoRunning = false
     }
 
     override fun seekTo(positionMs: Long) {
         // STOP VIDEO BEFORE SEEK
         val wasRunning = running
         running = false
+
+        // ensure rendering is disabled immediately
+        videoRunning = false
 
         try {
             decodeThread?.join()
@@ -195,7 +192,9 @@ class MediaCodecEngine(
 
         // RESET VIDEO TIMING STATE
         lastRenderedPtsUs = Long.MIN_VALUE
-        // Ensure we don't render immediately after seek; wait for audio clock
+
+        // re-enable rendering only after flush; suppress until audio catches up
+        videoRunning = true
         suppressRenderUntilAudioCatchup = true
 
         // SEEK VIDEO EXTRACTOR (must match audio seek target)
@@ -204,7 +203,7 @@ class MediaCodecEngine(
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
 
-        // Do NOT render immediately after this. Restart decode thread only if it was running.
+        // Restart decode thread only if it was running.
         if (wasRunning) {
             running = true
             decodeThread = thread(name = "video-decode") { decodeLoop() }
@@ -213,6 +212,7 @@ class MediaCodecEngine(
 
     override fun release() {
         running = false
+        videoRunning = false
         codec?.stop()
         codec?.release()
         extractor?.release()
