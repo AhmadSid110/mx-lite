@@ -58,8 +58,11 @@ private:
 
     /* ───────── Helpers ───────── */
     bool writeAudio(const int16_t* data, int32_t samples);
-    void renderAudio(int16_t* out, int32_t frames);
+    // `out` is an int16_t buffer sized for samples
+    // `samples` = frames * channelCount_
+    void renderAudio(int16_t* out, int32_t samples);
      void flushRingBuffer();
+    int32_t framesToSamples(int32_t frames) const;
 
     static aaudio_data_callback_result_t audioCallback(
             AAudioStream* stream,

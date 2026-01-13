@@ -293,6 +293,16 @@ bool AudioEngine::setupAAudio() {
     sampleRate_   = AAudioStream_getSampleRate(stream_);
     channelCount_ = AAudioStream_getChannelCount(stream_);
 
+    // Invariant: ring buffer stores SAMPLES (samples = frames * channelCount_)
+    if (channelCount_ <= 0) {
+        LOGE("Invalid channelCount_%d, defaulting to 2", channelCount_);
+        channelCount_ = 2;
+    }
+
+    if ((kRingBufferSize % channelCount_) != 0) {
+        LOGE("kRingBufferSize (%d) is not a multiple of channelCount (%d)", kRingBufferSize, channelCount_);
+    }
+
     gAudioDebug.aaudioOpened.store(true);
     return true;
 }
@@ -451,6 +461,11 @@ void AudioEngine::decodeLoop() {
 /* ===================== Producer (lock-free) ===================== */
 
 bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
+    // Sanity: samples should be a multiple of channelCount_ (samples = frames * channelCount_)
+    if ((samples % channelCount_) != 0) {
+        LOGE("writeAudio called with samples (%d) not multiple of channelCount (%d)", samples, channelCount_);
+        // continue anyway for robustness in release; this helps catch misuse during testing
+    }
     int32_t head = writeHead_.load(std::memory_order_acquire);
     int32_t tail = readHead_.load(std::memory_order_acquire);
 
@@ -468,12 +483,13 @@ bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
     }
 
     writeHead_.store(head, std::memory_order_release);
+    // Debug: expose raw buffer fill (samples) to help detect producer/consumer mismatch
+    gAudioDebug.bufferFill.store(writeHead_.load(std::memory_order_relaxed) -
+                                readHead_.load(std::memory_order_relaxed));
     return true;
 }
 
-void AudioEngine::renderAudio(int16_t* out, int32_t frames) {
-    int32_t samples = frames * 2; // stereo
-
+void AudioEngine::renderAudio(int16_t* out, int32_t samples) {
     int32_t head = writeHead_.load(std::memory_order_acquire);
     int32_t tail = readHead_.load(std::memory_order_acquire);
     int32_t available = head - tail;
@@ -515,6 +531,10 @@ int64_t AudioEngine::getClockUs() const {
     return timeNs / 1000;
 }
 
+int32_t AudioEngine::framesToSamples(int32_t frames) const {
+    return frames * channelCount_;
+}
+
 /* ===================== AAudio Callback ===================== */
 
 aaudio_data_callback_result_t AudioEngine::audioCallback(
@@ -526,7 +546,8 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
         auto* engine = static_cast<AudioEngine*>(userData);
         auto* out = static_cast<int16_t*>(audioData);
 
-        engine->renderAudio(out, numFrames);
+        int32_t samplesNeeded = engine->framesToSamples(numFrames);
+        engine->renderAudio(out, samplesNeeded);
 
         gAudioDebug.callbackCalled.store(true);
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
