@@ -27,8 +27,8 @@ object NativePlayer {
     external fun nativeSeek(positionUs: Long)
     private external fun nativeRelease()
     private external fun nativeGetClockUs(): Long
-    private external fun nativePause()
-    private external fun nativeResume()
+    external fun nativePause()
+    external fun nativeResume()
 
     fun pause() {
         nativePause()
