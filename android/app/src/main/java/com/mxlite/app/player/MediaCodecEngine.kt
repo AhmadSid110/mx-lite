@@ -119,15 +119,8 @@ class MediaCodecEngine(
         decodeThread = Thread {
             while (videoRunning) {
 
-                // 🔴 THIS IS THE FIX — gate both input and output when paused
-                if (videoPaused) {
-                    try {
-                        Thread.sleep(2)
-                    } catch (e: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                    }
-                    continue
-                }
+                // When paused, do NOT block input feeding. Only gate output.
+                // Input-side continues to feed codec so EOS and buffers are processed.
 
                 // INPUT (never blocked) — gate EOS so we only send it once
                 val inIndex = codec?.dequeueInputBuffer(0) ?: break
@@ -152,7 +145,13 @@ class MediaCodecEngine(
                 val info = MediaCodec.BufferInfo()
                 val outIndex = codec!!.dequeueOutputBuffer(info, 2_000)
 
-                if (videoPaused) continue
+                if (videoPaused) {
+                    // Drain output buffers but DO NOT render
+                    if (outIndex >= 0) {
+                        codec!!.releaseOutputBuffer(outIndex, false)
+                    }
+                    continue
+                }
 
                 when (outIndex) {
                     MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -278,7 +277,9 @@ class MediaCodecEngine(
     }
 
     override fun resume() {
-        // Resume video rendering without stopping/starting codec
+        // Reset sync state so video will catch up after resuming
+        suppressRenderUntilAudioCatchup = true
+        lastRenderedPtsUs = Long.MIN_VALUE
         videoPaused = false
     }
 
