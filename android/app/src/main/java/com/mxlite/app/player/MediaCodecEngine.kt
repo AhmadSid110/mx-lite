@@ -15,8 +15,9 @@ class MediaCodecEngine(
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
-    private var running = false
-    private var videoRunning = false
+    @Volatile private var videoRunning = false
+    @Volatile private var videoPaused = false
+    @Volatile private var inputEOS = false
     private var decodeThread: Thread? = null
     private var lastRenderedPtsUs: Long = Long.MIN_VALUE
     private var suppressRenderUntilAudioCatchup = false
@@ -28,23 +29,158 @@ class MediaCodecEngine(
         private set
 
     override val currentPositionMs: Long
-        get() = clock.positionMs
+        get() = if (hasAudio)
+            NativePlayer.getClockUs() / 1000
+        else
+            clock.positionMs
 
     override val isPlaying: Boolean
-        get() = running
+        get() = videoRunning && !videoPaused
 
     override fun attachSurface(surface: Surface) {
         this.surface = surface
     }
 
+    private fun handleVideoFrame(outIndex: Int, info: MediaCodec.BufferInfo) {
+        val framePtsUs = info.presentationTimeUs
+
+        // Prevent backward or duplicate frames
+        if (lastRenderedPtsUs != Long.MIN_VALUE && framePtsUs <= lastRenderedPtsUs) {
+            codec!!.releaseOutputBuffer(outIndex, false)
+            return
+        }
+
+        val audioUs = if (hasAudio) {
+            NativePlayer.getClockUs()
+        } else {
+            // 🔥 VIDEO-ONLY FALLBACK CLOCK
+            if (firstVideoPtsUs == Long.MIN_VALUE) {
+                firstVideoPtsUs = framePtsUs
+                videoStartNano = System.nanoTime()
+            }
+
+            val elapsedUs = (System.nanoTime() - videoStartNano) / 1000
+            firstVideoPtsUs + elapsedUs
+        }
+
+        if (audioUs <= 0) {
+            codec!!.releaseOutputBuffer(outIndex, false)
+            return
+        }
+
+        val diffUs = framePtsUs - audioUs
+
+        if (suppressRenderUntilAudioCatchup) {
+            if (info.presentationTimeUs > audioUs) {
+                codec!!.releaseOutputBuffer(outIndex, false)
+                return
+            }
+            suppressRenderUntilAudioCatchup = false
+        }
+
+        when {
+            diffUs > 15_000 -> {
+                var waitMs = diffUs / 1000
+                while (waitMs > 0 && !videoPaused) {
+                    val chunk = min(waitMs, 2L)
+                    try {
+                        Thread.sleep(chunk)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                    waitMs -= chunk
+                }
+
+                if (videoPaused) {
+                    codec!!.releaseOutputBuffer(outIndex, false)
+                    return
+                }
+
+                codec!!.releaseOutputBuffer(outIndex, true)
+                lastRenderedPtsUs = framePtsUs
+            }
+            diffUs < -50_000 -> {
+                codec!!.releaseOutputBuffer(outIndex, false)
+            }
+            else -> {
+                codec!!.releaseOutputBuffer(outIndex, true)
+                lastRenderedPtsUs = framePtsUs
+            }
+        }
+    }
+
+    private fun startDecodeLoop() {
+        // Prevent starting a second decode thread
+        if (decodeThread?.isAlive == true) return
+        videoRunning = true
+        videoPaused = false
+
+        decodeThread = Thread {
+            while (videoRunning) {
+
+                // 🔴 THIS IS THE FIX — gate both input and output when paused
+                if (videoPaused) {
+                    try {
+                        Thread.sleep(2)
+                    } catch (e: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                    }
+                    continue
+                }
+
+                // INPUT (never blocked) — gate EOS so we only send it once
+                val inIndex = codec?.dequeueInputBuffer(0) ?: break
+                if (!inputEOS && inIndex >= 0) {
+                    val inputBuffer = codec?.getInputBuffer(inIndex)
+                    val size = extractor?.readSampleData(inputBuffer!!, 0) ?: -1
+
+                    if (size > 0) {
+                        val pts = extractor!!.sampleTime
+                        codec!!.queueInputBuffer(inIndex, 0, size, pts, 0)
+                        extractor!!.advance()
+                    } else {
+                        codec!!.queueInputBuffer(
+                            inIndex, 0, 0, 0,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                        )
+                        inputEOS = true
+                    }
+                }
+
+                // OUTPUT (sync gated)
+                val info = MediaCodec.BufferInfo()
+                val outIndex = codec!!.dequeueOutputBuffer(info, 2_000)
+
+                if (videoPaused) continue
+
+                when (outIndex) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        // must be consumed; nothing to do here
+                    }
+                    MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                        continue
+                    }
+                    in 0..Int.MAX_VALUE -> {
+                        handleVideoFrame(outIndex, info)
+                    }
+                    else -> {
+                        // unknown code; ignore
+                    }
+                }
+            }
+        }
+
+        decodeThread?.start()
+    }
+
     override fun play(file: File) {
         release()
-        running = true
 
         // RESET VIDEO STATE
         lastRenderedPtsUs = Long.MIN_VALUE
         suppressRenderUntilAudioCatchup = true
-        videoRunning = true
+        inputEOS = false
 
         extractor = MediaExtractor().apply {
             setDataSource(file.absolutePath)
@@ -65,6 +201,11 @@ class MediaCodecEngine(
         }
 
         val trackIndex = selectVideoTrack(extractor!!)
+        if (trackIndex < 0) {
+            // No video track found — clean up and bail
+            release()
+            return
+        }
         extractor!!.selectTrack(trackIndex)
 
         val format = extractor!!.getTrackFormat(trackIndex)
@@ -86,80 +227,7 @@ class MediaCodecEngine(
         firstVideoPtsUs = Long.MIN_VALUE
 
         // START DECODE THREAD
-        decodeThread = Thread { decodeLoop() }
-        decodeThread?.start()
-    }
-
-    private fun decodeLoop() {
-        while (videoRunning) {
-
-            // INPUT (never blocked)
-            val inIndex = codec?.dequeueInputBuffer(0) ?: break
-            if (inIndex >= 0) {
-                val inputBuffer = codec?.getInputBuffer(inIndex)
-                val size = extractor?.readSampleData(inputBuffer!!, 0) ?: -1
-
-                if (size > 0) {
-                    val pts = extractor!!.sampleTime
-                    codec!!.queueInputBuffer(inIndex, 0, size, pts, 0)
-                    extractor!!.advance()
-                } else {
-                    codec!!.queueInputBuffer(
-                        inIndex, 0, 0, 0,
-                        MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                    )
-                }
-            }
-
-            // OUTPUT (sync gated)
-            val info = MediaCodec.BufferInfo()
-            val outIndex = codec!!.dequeueOutputBuffer(info, 10_000)
-
-            if (outIndex >= 0) {
-                    val framePtsUs = info.presentationTimeUs
-
-                    val audioUs = if (hasAudio) {
-                        NativePlayer.getClockUs()
-                    } else {
-                        // 🔥 VIDEO-ONLY FALLBACK CLOCK
-                        if (firstVideoPtsUs == Long.MIN_VALUE) {
-                            firstVideoPtsUs = framePtsUs
-                            videoStartNano = System.nanoTime()
-                        }
-
-                        val elapsedUs = (System.nanoTime() - videoStartNano) / 1000
-                        firstVideoPtsUs + elapsedUs
-                    }
-
-                    if (audioUs <= 0) {
-                        codec!!.releaseOutputBuffer(outIndex, false)
-                        continue
-                    }
-
-                    val diffUs = framePtsUs - audioUs
-
-                if (suppressRenderUntilAudioCatchup) {
-                    if (info.presentationTimeUs > audioUs) {
-                        codec!!.releaseOutputBuffer(outIndex, false)
-                        continue
-                    }
-                    suppressRenderUntilAudioCatchup = false
-                }
-
-                when {
-                    diffUs > 15_000 -> {
-                        Thread.sleep(diffUs / 1000)
-                        codec!!.releaseOutputBuffer(outIndex, true)
-                    }
-                    diffUs < -50_000 -> {
-                        codec!!.releaseOutputBuffer(outIndex, false)
-                    }
-                    else -> {
-                        codec!!.releaseOutputBuffer(outIndex, true)
-                    }
-                }
-            }
-        }
+        startDecodeLoop()
     }
 
     private fun selectVideoTrack(extractor: MediaExtractor): Int {
@@ -174,63 +242,61 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        // Pause video only: stop decode thread and rendering
-        videoRunning = false
-
-        try {
-            decodeThread?.join()
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
+        // Pause video rendering without stopping codec or decode thread
+        videoPaused = true
     }
 
     override fun seekTo(positionMs: Long) {
-        // STOP VIDEO THREAD BEFORE SEEK (video-only)
-        videoRunning = false
+        // 1️⃣ Pause decode loop
+        videoPaused = true
 
-        try {
-            decodeThread?.join()
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
+        // 2️⃣ Give decode loop time to exit dequeue calls
 
-        // FLUSH VIDEO CODEC — invalidates old frames and clears output queue
+        // 3️⃣ Flush codec safely
         codec?.flush()
 
-        // RESET VIDEO TIMING STATE — avoid reusing old PTS
-        lastRenderedPtsUs = Long.MIN_VALUE
+        // Reset input EOS state so we can feed input again after seeking
+        inputEOS = false
 
-        // SEEK VIDEO EXTRACTOR (must match audio seek target)
+        // 4️⃣ Seek extractor
         extractor?.seekTo(
             positionMs * 1000,
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
 
-        // re-enable rendering only after flush; suppress until audio catches up
+        // 5️⃣ Reset timing
+        lastRenderedPtsUs = Long.MIN_VALUE
         suppressRenderUntilAudioCatchup = true
-        videoRunning = true
+        firstVideoPtsUs = Long.MIN_VALUE
 
-        // Restart decode thread for video
-        startDecodeThread()
+        // 6️⃣ Resume decode loop
+        videoPaused = false
     }
 
     private fun startDecodeThread() {
-        decodeThread = thread(name = "video-decode") { decodeLoop() }
+        startDecodeLoop()
     }
 
     override fun resume() {
-        if (videoRunning) return
-        suppressRenderUntilAudioCatchup = true
-        videoRunning = true
-        startDecodeThread()
+        // Resume video rendering without stopping/starting codec
+        videoPaused = false
     }
 
     override fun release() {
-        running = false
         videoRunning = false
+        videoPaused = false
+
+        try {
+            decodeThread?.join()
+        } catch (_: InterruptedException) {
+        }
+
+        decodeThread = null
+
         codec?.stop()
         codec?.release()
         extractor?.release()
+
         codec = null
         extractor = null
         durationMs = 0

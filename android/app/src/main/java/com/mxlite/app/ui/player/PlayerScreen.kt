@@ -91,10 +91,8 @@ fun PlayerScreen(
     var subtitleLine by remember { mutableStateOf<SubtitleCue?>(null) }
     var playbackStarted by remember { mutableStateOf(false) }
 
-    var userSeeking by remember { mutableStateOf(false) }
-    var seekPositionMs by remember { mutableStateOf(0L) }
-    var sliderPosition by remember { mutableStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }
+    var sliderPos by remember { mutableStateOf(0f) }
 
     var subtitleController by remember { mutableStateOf<SubtitleController?>(null) }
     var subtitleOffsetMs by remember { mutableStateOf(0L) }
@@ -267,7 +265,7 @@ fun PlayerScreen(
     // ⏱ Poll engine clock
     LaunchedEffect(Unit) {
         while (true) {
-            if (!userSeeking) {
+            if (!dragging) {
                 positionMs = engine.currentPositionMs
                 durationMs = engine.durationMs
             }
@@ -392,21 +390,21 @@ fun PlayerScreen(
                 var displayDuration = durationMs.coerceAtLeast(1L)
 
                 Slider(
-                    value = sliderPosition,
+                    value = sliderPos,
                     onValueChange = {
-                        isDragging = true
-                        sliderPosition = it
+                        dragging = true
+                        sliderPos = it
                     },
                     onValueChangeFinished = {
-                        val seekMs = (sliderPosition * engine.durationMs).toLong()
+                        val seekMs = (sliderPos * engine.durationMs).toLong()
                         engine.seekTo(seekMs)
-                        isDragging = false
+                        dragging = false
                     }
                 )
 
                 LaunchedEffect(engine.currentPositionMs) {
-                    if (!isDragging && engine.durationMs > 0) {
-                        sliderPosition =
+                    if (!dragging && engine.durationMs > 0) {
+                        sliderPos =
                             engine.currentPositionMs.toFloat() / engine.durationMs
                     }
                 }

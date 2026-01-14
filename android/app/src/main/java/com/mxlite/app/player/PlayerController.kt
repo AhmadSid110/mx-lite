@@ -51,34 +51,44 @@ class PlayerController(
     }
 
     override fun pause() {
-        if (playing) {
-            NativePlayer.nativePause()
-            video.pause()
-            playing = false
-        }
+        if (!playing) return
+
+        playing = false
+
+        // 1️⃣ Pause video FIRST
+        video.pause()
+
+        // 2️⃣ Pause audio (master)
+        NativePlayer.nativePause()
     }
 
     override fun resume() {
-        if (!playing) {
-            NativePlayer.nativeResume()
-            video.resume()
-            playing = true
-        }
+        if (playing) return
+
+        playing = true
+
+        // 1️⃣ Resume audio FIRST (master clock)
+        NativePlayer.nativeResume()
+
+        // 2️⃣ Resume video
+        video.resume()
     }
 
     override fun seekTo(positionMs: Long) {
         val wasPlaying = playing
 
-        // 1. Pause everything
-        pause()
+        // 1️⃣ FULL PAUSE
+        if (wasPlaying) {
+            pause()
+        }
 
-        // 2. Seek AUDIO (master)
+        // 2️⃣ SEEK AUDIO (MASTER)
         NativePlayer.nativeSeek(positionMs * 1000)
 
-        // 3. Seek VIDEO
+        // 3️⃣ SEEK VIDEO
         video.seekTo(positionMs)
 
-        // 4. Resume if needed
+        // 4️⃣ RESUME
         if (wasPlaying) {
             resume()
         }
