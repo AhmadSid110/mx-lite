@@ -117,7 +117,7 @@ class MediaCodecEngine(
         videoPaused = false
 
         decodeThread = Thread {
-            while (videoRunning) {
+            while (videoRunning && !Thread.currentThread().isInterrupted) {
 
                 // When paused, do NOT block input feeding. Only gate output.
                 // Input-side continues to feed codec so EOS and buffers are processed.
@@ -241,35 +241,45 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        // Pause video rendering without stopping codec or decode thread
         videoPaused = true
+        videoRunning = false
+
+        try {
+            decodeThread?.interrupt()
+            decodeThread?.join()
+        } catch (_: InterruptedException) {}
+
+        decodeThread = null
     }
 
     override fun seekTo(positionMs: Long) {
-        // 1️⃣ Pause decode loop
-        videoPaused = true
+        // 1️⃣ Stop decode thread
+        videoRunning = false
+        try {
+            decodeThread?.interrupt()
+            decodeThread?.join()
+        } catch (_: InterruptedException) {}
 
-        // 2️⃣ Give decode loop time to exit dequeue calls
+        decodeThread = null
 
-        // 3️⃣ Flush codec safely
+        // 2️⃣ Flush codec safely (NO other thread running)
         codec?.flush()
-
-        // Reset input EOS state so we can feed input again after seeking
         inputEOS = false
 
-        // 4️⃣ Seek extractor
+        // 3️⃣ Seek extractor
         extractor?.seekTo(
             positionMs * 1000,
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
 
-        // 5️⃣ Reset timing
+        // 4️⃣ Reset timing
         lastRenderedPtsUs = Long.MIN_VALUE
         suppressRenderUntilAudioCatchup = true
         firstVideoPtsUs = Long.MIN_VALUE
 
-        // 6️⃣ Resume decode loop
-        videoPaused = false
+        // 5️⃣ Restart decode thread
+        videoRunning = true
+        startDecodeLoop()
     }
 
     private fun startDecodeThread() {
@@ -277,10 +287,14 @@ class MediaCodecEngine(
     }
 
     override fun resume() {
-        // Reset sync state so video will catch up after resuming
+        if (videoRunning) return
+
         suppressRenderUntilAudioCatchup = true
         lastRenderedPtsUs = Long.MIN_VALUE
         videoPaused = false
+        videoRunning = true
+
+        startDecodeLoop()
     }
 
     override fun release() {
