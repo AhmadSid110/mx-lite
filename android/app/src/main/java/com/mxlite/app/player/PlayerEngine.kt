@@ -11,6 +11,8 @@ interface PlayerEngine {
 
     fun pause()
 
+    fun resume()
+
     fun seekTo(positionMs: Long)
 
     fun release()

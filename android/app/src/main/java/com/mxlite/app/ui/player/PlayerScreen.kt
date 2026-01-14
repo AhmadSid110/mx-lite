@@ -13,6 +13,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -414,6 +417,26 @@ fun PlayerScreen(
                     text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
                     style = MaterialTheme.typography.bodyMedium
                 )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                IconButton(
+                    onClick = {
+                        if (engine.isPlaying) {
+                            engine.pause()
+                        } else {
+                            engine.resume()
+                        }
+                    }
+                ) {
+                    Icon(
+                        imageVector = if (engine.isPlaying)
+                            Icons.Filled.Pause
+                        else
+                            Icons.Filled.PlayArrow,
+                        contentDescription = null
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 

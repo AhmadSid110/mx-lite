@@ -15,7 +15,7 @@ class PlayerController(
     private val legacyAudio = AudioCodecEngine()
 
     private var hasAudio = false
-    private var paused = false
+    private var playing = false
 
     override val durationMs: Long
         get() = video.durationMs
@@ -28,7 +28,7 @@ class PlayerController(
         }
 
     override val isPlaying: Boolean
-        get() = video.isPlaying
+        get() = playing
 
     override fun attachSurface(surface: Surface) {
         video.attachSurface(surface)
@@ -47,35 +47,35 @@ class PlayerController(
 
         // 3️⃣ Start video immediately
         video.play(file)
-        paused = false
+        playing = true
     }
 
     override fun pause() {
-        if (!paused) {
-            NativePlayer.pause()
+        if (playing) {
+            NativePlayer.nativePause()
             video.pause()
-            paused = true
+            playing = false
         }
     }
 
-    fun resume() {
-        if (paused) {
-            NativePlayer.resume()
+    override fun resume() {
+        if (!playing) {
+            NativePlayer.nativeResume()
             video.resume()
-            paused = false
+            playing = true
         }
     }
 
     override fun seekTo(positionMs: Long) {
-        val wasPlaying = isPlaying
+        val wasPlaying = playing
 
-        // 1. Pause
+        // 1. Pause everything
         pause()
 
-        // 2. Seek audio (MASTER)
+        // 2. Seek AUDIO (master)
         NativePlayer.nativeSeek(positionMs * 1000)
 
-        // 3. Seek video
+        // 3. Seek VIDEO
         video.seekTo(positionMs)
 
         // 4. Resume if needed
@@ -91,6 +91,6 @@ class PlayerController(
         legacyAudio.release()
         video.release()
         hasAudio = false
-        paused = false
+        playing = false
     }
 }
