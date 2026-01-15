@@ -129,7 +129,7 @@ class MediaCodecEngine(
         durationMs =
             if (format.containsKey(MediaFormat.KEY_DURATION))
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
-            else 0
+            else 0L
 
         codec = MediaCodec.createDecoderByType(
             format.getString(MediaFormat.KEY_MIME)!!
@@ -158,7 +158,7 @@ class MediaCodecEngine(
         decodeThread?.interrupt()
         try {
             decodeThread?.join()
-        } catch (_: Exception) {}
+        } catch (_: InterruptedException) {}
     }
 
     override fun seekTo(positionMs: Long) {
@@ -193,7 +193,7 @@ class MediaCodecEngine(
         durationMs =
             if (format.containsKey(MediaFormat.KEY_DURATION))
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
-            else 0
+            else 0L
 
         codec = MediaCodec.createDecoderByType(
             format.getString(MediaFormat.KEY_MIME)!!
@@ -215,7 +215,7 @@ class MediaCodecEngine(
 
         try {
             decodeThread?.join()
-        } catch (_: Exception) {}
+        } catch (_: InterruptedException) {}
 
         codec?.stop()
         codec?.release()
