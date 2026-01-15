@@ -14,8 +14,9 @@ class MediaCodecEngine(
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
     private var decodeThread: Thread? = null
-    private var running = false
+    @Volatile private var running = false
     private var hasAudio = false
+    private var currentFilePath: String? = null
 
     override var durationMs: Long = 0
         private set
@@ -44,7 +45,13 @@ class MediaCodecEngine(
 
         when {
             diffUs > 0 -> {
-                Thread.sleep(diffUs / 1000)
+                try {
+                    Thread.sleep(diffUs / 1000)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    codec!!.releaseOutputBuffer(outIndex, false)
+                    return
+                }
                 codec!!.releaseOutputBuffer(outIndex, true)
             }
             diffUs < -40_000 -> {
@@ -59,8 +66,9 @@ class MediaCodecEngine(
     private fun startDecodeThread() {
         decodeThread = Thread {
             val info = MediaCodec.BufferInfo()
+            var eosReached = false
 
-            while (running) {
+            while (running && !eosReached) {
 
                 // INPUT
                 val inIndex = codec!!.dequeueInputBuffer(0)
@@ -79,6 +87,7 @@ class MediaCodecEngine(
                             inIndex, 0, 0, 0,
                             MediaCodec.BUFFER_FLAG_END_OF_STREAM
                         )
+                        eosReached = true
                     }
                 }
 
@@ -96,6 +105,8 @@ class MediaCodecEngine(
     override fun play(file: File) {
         release()
 
+        currentFilePath = file.absolutePath
+
         extractor = MediaExtractor().apply {
             setDataSource(file.absolutePath)
         }
@@ -107,6 +118,11 @@ class MediaCodecEngine(
         }
 
         val videoTrack = selectVideoTrack(extractor!!)
+        if (videoTrack < 0) {
+            // No video track found
+            release()
+            return
+        }
         extractor!!.selectTrack(videoTrack)
 
         val format = extractor!!.getTrackFormat(videoTrack)
@@ -139,18 +155,28 @@ class MediaCodecEngine(
 
     override fun pause() {
         running = false
+        decodeThread?.interrupt()
+        try {
+            decodeThread?.join()
+        } catch (_: Exception) {}
     }
 
     override fun seekTo(positionMs: Long) {
         // VIDEO SEEK = DESTROY & RECREATE
-        val currentFile = File(extractor!!.cachedSourcePath)
+        val filePath = currentFilePath ?: return
         release()
+        
         extractor = MediaExtractor().apply {
-            setDataSource(currentFile.absolutePath)
+            setDataSource(filePath)
         }
         extractor!!.seekTo(positionMs * 1000, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
         
         val videoTrack = selectVideoTrack(extractor!!)
+        if (videoTrack < 0) {
+            // No video track found
+            release()
+            return
+        }
         extractor!!.selectTrack(videoTrack)
 
         val format = extractor!!.getTrackFormat(videoTrack)
