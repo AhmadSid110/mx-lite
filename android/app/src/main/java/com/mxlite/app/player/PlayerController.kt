@@ -16,6 +16,7 @@ class PlayerController(
 
     private var hasAudio = false
     private var playing = false
+    private var currentFile: File? = null
 
     override val durationMs: Long
         get() = video.durationMs
@@ -37,6 +38,9 @@ class PlayerController(
     override fun play(file: File) {
         release()
 
+        // Store current file for seek operations
+        currentFile = file
+
         // 1️⃣ Detect audio track
         hasAudio = legacyAudio.hasAudioTrack(file)
 
@@ -55,11 +59,10 @@ class PlayerController(
 
         playing = false
 
-        // 1️⃣ Pause video FIRST
-        video.pause()
-
-        // 2️⃣ Pause audio (master)
-        NativePlayer.nativePause()
+        // ONLY audio pauses
+        if (hasAudio) {
+            NativePlayer.nativePause()
+        }
     }
 
     override fun resume() {
@@ -67,30 +70,34 @@ class PlayerController(
 
         playing = true
 
-        // 1️⃣ Resume audio FIRST (master clock)
-        NativePlayer.nativeResume()
-
-        // 2️⃣ Resume video
-        video.resume()
+        // ONLY audio resumes
+        if (hasAudio) {
+            NativePlayer.nativeResume()
+        }
     }
 
     override fun seekTo(positionMs: Long) {
         val wasPlaying = playing
 
-        // 1️⃣ FULL PAUSE
-        if (wasPlaying) {
-            pause()
+        // 1. Pause audio (if present)
+        if (hasAudio) {
+            NativePlayer.nativePause()
         }
 
-        // 2️⃣ SEEK AUDIO (MASTER)
-        NativePlayer.nativeSeek(positionMs * 1000)
+        // 2. Seek audio (MASTER - if present)
+        if (hasAudio) {
+            NativePlayer.nativeSeek(positionMs * 1000)
+        }
 
-        // 3️⃣ SEEK VIDEO
-        video.seekTo(positionMs)
+        // 3. RECREATE VIDEO ENGINE
+        currentFile?.let { file ->
+            video.release()
+            video.play(file)
+        }
 
-        // 4️⃣ RESUME
-        if (wasPlaying) {
-            resume()
+        // 4. Resume audio if needed
+        if (wasPlaying && hasAudio) {
+            NativePlayer.nativeResume()
         }
     }
 
@@ -102,5 +109,6 @@ class PlayerController(
         video.release()
         hasAudio = false
         playing = false
+        currentFile = null
     }
 }

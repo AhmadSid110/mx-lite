@@ -16,7 +16,6 @@ class MediaCodecEngine(
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
     @Volatile private var videoRunning = false
-    @Volatile private var videoPaused = false
     @Volatile private var inputEOS = false
     private var decodeThread: Thread? = null
     private var lastRenderedPtsUs: Long = Long.MIN_VALUE
@@ -35,7 +34,7 @@ class MediaCodecEngine(
             clock.positionMs
 
     override val isPlaying: Boolean
-        get() = videoRunning && !videoPaused
+        get() = videoRunning
 
     override fun attachSurface(surface: Surface) {
         this.surface = surface
@@ -81,7 +80,7 @@ class MediaCodecEngine(
         when {
             diffUs > 15_000 -> {
                 var waitMs = diffUs / 1000
-                while (waitMs > 0 && !videoPaused) {
+                while (waitMs > 0) {
                     val chunk = min(waitMs, 2L)
                     try {
                         Thread.sleep(chunk)
@@ -90,11 +89,6 @@ class MediaCodecEngine(
                         break
                     }
                     waitMs -= chunk
-                }
-
-                if (videoPaused) {
-                    codec!!.releaseOutputBuffer(outIndex, false)
-                    return
                 }
 
                 codec!!.releaseOutputBuffer(outIndex, true)
@@ -114,15 +108,11 @@ class MediaCodecEngine(
         // Prevent starting a second decode thread
         if (decodeThread?.isAlive == true) return
         videoRunning = true
-        videoPaused = false
 
         decodeThread = Thread {
             while (videoRunning && !Thread.currentThread().isInterrupted) {
 
-                // When paused, do NOT block input feeding. Only gate output.
-                // Input-side continues to feed codec so EOS and buffers are processed.
-
-                // INPUT (never blocked) — gate EOS so we only send it once
+                // INPUT — gate EOS so we only send it once
                 val inIndex = codec?.dequeueInputBuffer(0) ?: break
                 if (!inputEOS && inIndex >= 0) {
                     val inputBuffer = codec?.getInputBuffer(inIndex)
@@ -141,17 +131,9 @@ class MediaCodecEngine(
                     }
                 }
 
-                // OUTPUT (sync gated)
+                // OUTPUT
                 val info = MediaCodec.BufferInfo()
                 val outIndex = codec!!.dequeueOutputBuffer(info, 2_000)
-
-                if (videoPaused) {
-                    // Drain output buffers but DO NOT render
-                    if (outIndex >= 0) {
-                        codec!!.releaseOutputBuffer(outIndex, false)
-                    }
-                    continue
-                }
 
                 when (outIndex) {
                     MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -241,65 +223,22 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        videoPaused = true
-        videoRunning = false
-
-        try {
-            decodeThread?.interrupt()
-            decodeThread?.join()
-        } catch (_: InterruptedException) {}
-
-        decodeThread = null
+        // No-op: Video decode continues running, synchronized to audio clock.
+        // PlayerController handles pause via audio master clock.
     }
 
     override fun seekTo(positionMs: Long) {
-        // 1️⃣ Stop decode thread
-        videoRunning = false
-        try {
-            decodeThread?.interrupt()
-            decodeThread?.join()
-        } catch (_: InterruptedException) {}
-
-        decodeThread = null
-
-        // 2️⃣ Flush codec safely (NO other thread running)
-        codec?.flush()
-        inputEOS = false
-
-        // 3️⃣ Seek extractor
-        extractor?.seekTo(
-            positionMs * 1000,
-            MediaExtractor.SEEK_TO_CLOSEST_SYNC
-        )
-
-        // 4️⃣ Reset timing
-        lastRenderedPtsUs = Long.MIN_VALUE
-        suppressRenderUntilAudioCatchup = true
-        firstVideoPtsUs = Long.MIN_VALUE
-
-        // 5️⃣ Restart decode thread
-        videoRunning = true
-        startDecodeLoop()
-    }
-
-    private fun startDecodeThread() {
-        startDecodeLoop()
+        // No-op: Video engine is recreated by PlayerController on seek
+        // rather than attempting state synchronization.
     }
 
     override fun resume() {
-        if (videoRunning) return
-
-        suppressRenderUntilAudioCatchup = true
-        lastRenderedPtsUs = Long.MIN_VALUE
-        videoPaused = false
-        videoRunning = true
-
-        startDecodeLoop()
+        // No-op: Video decode runs continuously, synchronized to audio clock.
+        // PlayerController handles resume via audio master clock.
     }
 
     override fun release() {
         videoRunning = false
-        videoPaused = false
 
         try {
             decodeThread?.join()
