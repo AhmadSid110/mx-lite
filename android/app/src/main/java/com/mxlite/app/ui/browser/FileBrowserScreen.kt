@@ -25,6 +25,7 @@ import com.mxlite.app.browser.VideoItem
 import com.mxlite.app.browser.VideoStoreRepository
 import com.mxlite.app.storage.SafFileCopier
 import com.mxlite.app.storage.StorageStore
+import com.mxlite.app.ui.components.ModernFolderItem
 import java.io.File
 
 /* ───────────────────────────────────────────── */
@@ -41,7 +42,9 @@ private fun extractFolderDisplayName(folder: String?): String =
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
-    onFileSelected: (File) -> Unit
+    onFileSelected: (File) -> Unit,
+    initialFolder: String? = null,
+    onNavigateHome: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val store = remember { StorageStore(context) }
@@ -49,7 +52,7 @@ fun FileBrowserScreen(
 
     /* ✅ MediaStore videos */
     var videos by remember { mutableStateOf<List<VideoItem>>(emptyList()) }
-    var currentFolder by remember { mutableStateOf<String?>(null) }
+    var currentFolder by remember { mutableStateOf<String?>(initialFolder) }
 
     /* ✅ SAF folders */
     var safFolders by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -122,9 +125,12 @@ fun FileBrowserScreen(
         if (currentSafDir == null && safFolders.isNotEmpty()) {
             LazyColumn {
                 items(safFolders) { uri ->
-                    FolderCard(uri.lastPathSegment ?: "Folder") {
-                        currentSafDir =
-                            DocumentFile.fromTreeUri(context, uri)
+                    ModernFolderItem(
+                        folderName = uri.lastPathSegment ?: "Folder",
+                        videoCount = 0,
+                        folderSize = "—"
+                    ) {
+                        currentSafDir = DocumentFile.fromTreeUri(context, uri)
                     }
                 }
             }
@@ -140,7 +146,11 @@ fun FileBrowserScreen(
 
             LazyColumn {
                 items(children) { doc ->
-                    FolderCard(doc.name ?: "") {
+                    ModernFolderItem(
+                        folderName = doc.name ?: "",
+                        videoCount = if (doc.isDirectory) doc.listFiles().count { !it.isDirectory } else 1,
+                        folderSize = "—"
+                    ) {
                         if (doc.isDirectory) {
                             currentSafDir = doc
                         } else {
@@ -165,7 +175,11 @@ fun FileBrowserScreen(
             
             LazyColumn {
                 items(folderVideos) { video ->
-                    FolderCard(video.name) {
+                    ModernFolderItem(
+                        folderName = video.name,
+                        videoCount = 1,
+                        folderSize = "—"
+                    ) {
                         scope.launch {
                             val cachedFile = withContext(Dispatchers.IO) {
                                 SafFileCopier.copyToCache(context, video.contentUri)
@@ -185,7 +199,11 @@ fun FileBrowserScreen(
             LazyColumn {
                 items(folders) { folder ->
                     val displayName = extractFolderDisplayName(folder)
-                    FolderCard(displayName) {
+                    ModernFolderItem(
+                        folderName = displayName,
+                        videoCount = videos.count { it.folder == folder },
+                        folderSize = "—"
+                    ) {
                         currentFolder = folder
                     }
                 }
@@ -194,29 +212,3 @@ fun FileBrowserScreen(
     }
 }
 
-/* ───────────────────────────────────────────── */
-/* Reusable card */
-/* ───────────────────────────────────────────── */
-
-@Composable
-private fun FolderCard(
-    title: String,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("📁", style = MaterialTheme.typography.headlineSmall)
-            Spacer(Modifier.width(12.dp))
-            Text(title, maxLines = 1)
-        }
-    }
-}
