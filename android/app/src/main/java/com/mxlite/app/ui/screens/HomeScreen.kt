@@ -42,8 +42,7 @@ fun HomeScreen(
             contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
         ) {
             items(
-                items = folders,
-                key = { it.name } // ✅ Stable Key for performance
+                items = folders
             ) { folder ->
                 ModernFolderItem(
                     folderName = folder.name,

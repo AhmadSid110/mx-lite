@@ -1,13 +1,18 @@
 package com.mxlite.app.ui
 
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import com.mxlite.app.player.PlayerController
-import com.mxlite.app.ui.browser.FileBrowserScreen
 import com.mxlite.app.ui.player.PlayerScreen
 import com.mxlite.app.ui.screens.HomeScreen
+import com.mxlite.app.ui.screens.TabbedFolderScreen
 import com.mxlite.app.model.FolderInfo
+import com.mxlite.app.model.VideoFile
 import com.mxlite.app.browser.VideoStoreRepository
+import com.mxlite.app.storage.SafFileCopier
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
@@ -25,16 +30,29 @@ fun AppRoot() {
 
     /* Load folders from MediaStore */
     LaunchedEffect(Unit) {
-        val videos = VideoStoreRepository.load(context)
+        val items = VideoStoreRepository.load(context)
+
+        // Map VideoItem -> VideoFile
+        val videos = items.map { item ->
+            VideoFile(
+                id = item.contentUri.toString(),
+                path = item.folder,
+                name = item.name,
+                size = item.size,
+                duration = item.duration,
+                dateAdded = item.dateAdded
+            )
+        }
+
         folders = videos
-            .groupBy { it.folder }
+            .groupBy { it.path }
             .map { (folderPath, list) ->
                 val displayName = folderPath.split('/').lastOrNull() ?: "Videos"
                 FolderInfo(
                     name = displayName,
-                    path = folderPath,
                     videoCount = list.size,
-                    totalSizeFormatted = "—"
+                    totalSize = list.sumOf { it.size },
+                    videos = list
                 )
             }
             .sortedBy { it.name }
@@ -50,11 +68,27 @@ fun AppRoot() {
             }
         )
     } else if (selectedFolder != null) {
-        FileBrowserScreen(
-            onFileSelected = { file -> playingFile = file },
-            initialFolder = selectedFolder!!.path,
-            onNavigateHome = { selectedFolder = null }
+        var videoToPlay by remember { mutableStateOf<com.mxlite.app.model.VideoFile?>(null) }
+
+        TabbedFolderScreen(
+            folder = selectedFolder!!,
+            onVideoClick = { video ->
+                videoToPlay = video
+            },
+            onBack = { selectedFolder = null }
         )
+
+        // ✅ FIX: Use LaunchedEffect to run suspend work when a video is requested
+        LaunchedEffect(videoToPlay) {
+            val v = videoToPlay
+            if (v != null) {
+                val cachedFile = withContext(Dispatchers.IO) {
+                    SafFileCopier.copyToCache(context, android.net.Uri.parse(v.id))
+                }
+                playingFile = cachedFile
+                videoToPlay = null
+            }
+        }
     } else {
         HomeScreen(
             folders = folders,

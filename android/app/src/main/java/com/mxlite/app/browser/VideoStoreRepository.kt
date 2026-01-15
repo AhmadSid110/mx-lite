@@ -10,7 +10,10 @@ const val DEFAULT_FOLDER_NAME = "Videos"
 data class VideoItem(
     val contentUri: Uri,
     val name: String,
-    val folder: String
+    val folder: String,
+    val size: Long,
+    val duration: Long,
+    val dateAdded: Long
 )
 
 object VideoStoreRepository {
@@ -21,7 +24,10 @@ object VideoStoreRepository {
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
-            MediaStore.Video.Media.RELATIVE_PATH
+            MediaStore.Video.Media.RELATIVE_PATH,
+            MediaStore.Video.Media.SIZE,
+            MediaStore.Video.Media.DURATION,
+            MediaStore.Video.Media.DATE_ADDED
         )
 
         try {
@@ -35,11 +41,17 @@ object VideoStoreRepository {
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
                 val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
                 val pathCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.RELATIVE_PATH)
+                val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
+                val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
+                val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATE_ADDED)
 
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idCol)
                     val name = cursor.getString(nameCol)
                     val folder = cursor.getString(pathCol)?.trimEnd('/') ?: DEFAULT_FOLDER_NAME
+                    val size = cursor.getLong(sizeCol)
+                    val duration = cursor.getLong(durationCol)
+                    val dateAdded = cursor.getLong(dateCol)
 
                     items.add(
                         VideoItem(
@@ -48,7 +60,10 @@ object VideoStoreRepository {
                                 id
                             ),
                             name = name,
-                            folder = folder
+                            folder = folder,
+                            size = size,
+                            duration = duration,
+                            dateAdded = dateAdded
                         )
                     )
                 }
