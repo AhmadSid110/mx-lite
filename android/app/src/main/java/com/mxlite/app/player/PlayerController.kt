@@ -46,8 +46,11 @@ class PlayerController(
             NativePlayer.play(context, file.absolutePath)
         }
 
-        video.play(file)
-        playing = true
+        // 🔑 IMPORTANT
+        if (video.hasSurface()) {
+            video.play(file)
+            playing = true
+        }
     }
 
     override fun pause() {

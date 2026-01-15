@@ -3,6 +3,7 @@ package com.mxlite.app.player
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.util.Log
 import android.view.Surface
 import java.io.File
 
@@ -14,6 +15,7 @@ class MediaCodecEngine(
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
 
+    @Volatile private var surfaceReady = false
     @Volatile private var videoRunning = false
     @Volatile private var renderEnabled = true
     @Volatile private var inputEOS = false
@@ -32,16 +34,21 @@ class MediaCodecEngine(
 
     override fun attachSurface(surface: Surface) {
         this.surface = surface
+        surfaceReady = true
     }
 
     fun setRenderEnabled(enabled: Boolean) {
         renderEnabled = enabled
     }
 
+    fun hasSurface(): Boolean = surfaceReady && surface?.isValid == true
+
     private fun handleVideoFrame(
         outIndex: Int,
         info: MediaCodec.BufferInfo
     ) {
+        Log.d("VIDEO", "render=$renderEnabled pts=${info.presentationTimeUs}")
+        
         // 🔑 HARD GATE: when audio paused or seeking, never render or wait
         if (!renderEnabled) {
             codec!!.releaseOutputBuffer(outIndex, false)
@@ -134,6 +141,11 @@ class MediaCodecEngine(
     }
 
     override fun play(file: File) {
+        if (!hasSurface()) {
+            // Do NOT start codec without a surface
+            return
+        }
+
         release()
 
         extractor = MediaExtractor().apply {

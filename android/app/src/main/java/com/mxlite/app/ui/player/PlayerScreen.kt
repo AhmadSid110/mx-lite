@@ -338,7 +338,10 @@ fun PlayerScreen(
                                     height: Int
                                 ) = Unit
 
-                                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) = Unit
+                                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
+                                    // IMPORTANT: stop video rendering
+                                    engine.pause()
+                                }
                             }
                         )
                     }
