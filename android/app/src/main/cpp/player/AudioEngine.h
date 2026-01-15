@@ -40,7 +40,9 @@ private:
     /* Threading */
     std::thread decodeThread_;
     std::atomic<bool> isPlaying_{false};
-    std::atomic<bool> aaudioStarted_{false};
+    
+    // Note: We removed the wait-for-callback logic, so this might be debug-only now
+    std::atomic<bool> aaudioStarted_{false}; 
 
     /* ───────── Ring Buffer (lock-free) ───────── */
     static constexpr int32_t kRingBufferSize = 192000;
@@ -48,22 +50,29 @@ private:
 
     std::atomic<int32_t> writeHead_{0};
     std::atomic<int32_t> readHead_{0};
+    
+    /* ───────── Time Offset Variables (THE FIX) ───────── */
+    // Tracks where we seeked to (e.g., 10:00)
+    std::atomic<int64_t> seekOffsetUs_{0};  
+    // Tracks hardware frame count at the moment of seek
+    int64_t startFramePosition_ = 0;        
 
     /* Internal */
     bool setupAAudio();
     void cleanupAAudio();
-    void cleanupMedia();   // ✅ ADD THIS LINE
+    void cleanupMedia();
 
     void decodeLoop();
+    
+    // These helpers seem legacy or debug, keeping them if you use them internally
     void writePcmBlocking(const int16_t* in, int frames);
     int readPcm(int16_t* out, int frames);
 
     /* ───────── Helpers ───────── */
     bool writeAudio(const int16_t* data, int32_t samples);
-    // `out` is an int16_t buffer sized for samples
-    // `samples` = frames * channelCount_
     void renderAudio(int16_t* out, int32_t samples);
-     void flushRingBuffer();
+    void flushRingBuffer();
+    
     int32_t framesToSamples(int32_t frames) const;
 
     static aaudio_data_callback_result_t audioCallback(
