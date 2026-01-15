@@ -1,17 +1,11 @@
-package com.mxlite.app.player
-
-import android.content.Context
-import android.view.Surface
-import java.io.File
-
 class PlayerController(
     private val context: Context
 ) : PlayerEngine {
 
     private val nativeClock = NativeClock()
-    private val video = MediaCodecEngine(clock = nativeClock)
+    private var video: MediaCodecEngine? = null
+    private var surface: Surface? = null
 
-    // ONLY for detecting audio track
     private val legacyAudio = AudioCodecEngine()
 
     private var hasAudio = false
@@ -19,85 +13,90 @@ class PlayerController(
     private var currentFile: File? = null
 
     override val durationMs: Long
-        get() = video.durationMs
+        get() = video?.durationMs ?: 0
 
     override val currentPositionMs: Long
-        get() = if (hasAudio) {
+        get() = if (hasAudio)
             NativePlayer.getClockUs() / 1000
-        } else {
-            video.currentPositionMs
-        }
+        else
+            video?.currentPositionMs ?: 0
 
     override val isPlaying: Boolean
         get() = playing
 
     override fun attachSurface(surface: Surface) {
-        video.attachSurface(surface)
+        this.surface = surface
+        video?.attachSurface(surface)
     }
 
     override fun play(file: File) {
         release()
 
-        // Store current file for seek operations
         currentFile = file
-
-        // 1️⃣ Detect audio track
         hasAudio = legacyAudio.hasAudioTrack(file)
 
-        // 2️⃣ Start native audio FIRST (if present)
+        // 1️⃣ Start audio FIRST (master)
         if (hasAudio) {
             NativePlayer.play(context, file.absolutePath)
         }
 
-        // 3️⃣ Start video immediately
-        video.play(file)
+        // 2️⃣ Create NEW video engine
+        video = MediaCodecEngine(clock = nativeClock).apply {
+            surface?.let { attachSurface(it) }
+            play(file)
+        }
+
         playing = true
     }
 
     override fun pause() {
         if (!playing) return
-
         playing = false
 
-        // ONLY audio pauses
+        // ONLY pause audio
         if (hasAudio) {
             NativePlayer.nativePause()
         }
+
+        // Video stays alive but idle
     }
 
     override fun resume() {
         if (playing) return
-
         playing = true
 
-        // ONLY audio resumes
         if (hasAudio) {
             NativePlayer.nativeResume()
         }
+        // Video auto-catches up using audio clock
     }
 
     override fun seekTo(positionMs: Long) {
         val wasPlaying = playing
+        playing = false
 
-        // 1. Pause audio (if present)
+        // 1️⃣ Pause audio
         if (hasAudio) {
             NativePlayer.nativePause()
-        }
-
-        // 2. Seek audio (MASTER - if present)
-        if (hasAudio) {
             NativePlayer.nativeSeek(positionMs * 1000)
         }
 
-        // 3. RECREATE VIDEO ENGINE
+        // 2️⃣ DESTROY video completely
+        video?.release()
+        video = null
+
+        // 3️⃣ RECREATE video
         currentFile?.let { file ->
-            video.release()
-            video.play(file)
+            video = MediaCodecEngine(clock = nativeClock).apply {
+                surface?.let { attachSurface(it) }
+                play(file)
+            }
         }
 
-        // 4. Resume audio if needed
+        // 4️⃣ Resume audio if needed
         if (wasPlaying && hasAudio) {
             NativePlayer.nativeResume()
+            playing = true
         }
     }
 
@@ -105,8 +104,11 @@ class PlayerController(
         if (hasAudio) {
             NativePlayer.release()
         }
+
         legacyAudio.release()
-        video.release()
+        video?.release()
+        video = null
+
         hasAudio = false
         playing = false
         currentFile = null
