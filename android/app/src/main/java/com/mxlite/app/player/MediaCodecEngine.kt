@@ -223,18 +223,18 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        // Video never pauses — only audio pauses
-        // PlayerController manages this
+        // No-op: Video decode continues running, synchronized to audio clock.
+        // PlayerController handles pause via audio master clock.
     }
 
     override fun seekTo(positionMs: Long) {
-        // Video does NOT seek internally
-        // It will be recreated by PlayerController
+        // No-op: Video engine is recreated by PlayerController on seek
+        // rather than attempting state synchronization.
     }
 
     override fun resume() {
-        // Video never resumes — only audio resumes
-        // PlayerController manages this
+        // No-op: Video decode runs continuously, synchronized to audio clock.
+        // PlayerController handles resume via audio master clock.
     }
 
     override fun release() {
