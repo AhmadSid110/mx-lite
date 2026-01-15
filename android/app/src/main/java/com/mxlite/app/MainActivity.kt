@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import com.mxlite.app.ui.AppRoot
 import com.mxlite.app.ui.PermissionWaitingScreen
+import com.mxlite.app.ui.theme.MxLiteTheme
 import com.mxlite.app.debug.CrashHandler
 
 class MainActivity : ComponentActivity() {
@@ -27,10 +28,19 @@ class MainActivity : ComponentActivity() {
         CrashHandler.install(this)
 
         setContent {
-            if (permissionGranted) {
-                AppRoot()
-            } else {
-                PermissionWaitingScreen()
+            MxLiteTheme {
+                if (permissionGranted) {
+                    AppRoot()
+                } else {
+                    PermissionWaitingScreen()
+                }
+
+                // For testing Phase 1, you can temporarily replace the above with a Surface:
+                /*
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Text("Phase 1 Complete: Cinema Theme Active")
+                }
+                */
             }
         }
 
