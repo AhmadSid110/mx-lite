@@ -1,193 +1,120 @@
 package com.mxlite.app.player
 
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaFormat
+import android.content.Context
 import android.view.Surface
 import java.io.File
 
-class MediaCodecEngine(
-    private val clock: NativeClock
+class PlayerController(
+    private val context: Context
 ) : PlayerEngine {
 
-    private var extractor: MediaExtractor? = null
-    private var codec: MediaCodec? = null
-    private var surface: Surface? = null
+    private val nativeClock = NativeClock()
+    private val video = MediaCodecEngine(nativeClock)
+    private val legacyAudio = AudioCodecEngine()
 
-    @Volatile private var videoRunning = false
-    @Volatile private var renderEnabled = true
-    @Volatile private var inputEOS = false
+    private var hasAudio = false
+    private var playing = false
+    private var currentFile: File? = null
+    private var seeking = false
 
-    private var decodeThread: Thread? = null
-    private var lastRenderedPtsUs: Long = Long.MIN_VALUE
-
-    override var durationMs: Long = 0
-        private set
+    override val durationMs: Long
+        get() = video.durationMs
 
     override val currentPositionMs: Long
-        get() = clock.positionMs
+        get() = if (hasAudio)
+            NativePlayer.getClockUs() / 1000
+        else
+            video.currentPositionMs
 
     override val isPlaying: Boolean
-        get() = videoRunning
+        get() = playing
 
     override fun attachSurface(surface: Surface) {
-        this.surface = surface
-    }
-
-    fun setRenderEnabled(enabled: Boolean) {
-        renderEnabled = enabled
-    }
-
-    private fun handleVideoFrame(
-        outIndex: Int,
-        info: MediaCodec.BufferInfo
-    ) {
-        // 🔑 HARD GATE: when audio paused or seeking, never render or wait
-        if (!renderEnabled) {
-            codec!!.releaseOutputBuffer(outIndex, false)
-            lastRenderedPtsUs = info.presentationTimeUs
-            return
-        }
-
-        val ptsUs = info.presentationTimeUs
-
-        // Drop backward / duplicate frames
-        if (lastRenderedPtsUs != Long.MIN_VALUE && ptsUs <= lastRenderedPtsUs) {
-            codec!!.releaseOutputBuffer(outIndex, false)
-            return
-        }
-
-        val audioUs = NativePlayer.getClockUs()
-        if (audioUs <= 0) {
-            codec!!.releaseOutputBuffer(outIndex, false)
-            return
-        }
-
-        val diffUs = ptsUs - audioUs
-
-        when {
-            diffUs > 15_000 -> {
-                Thread.sleep(diffUs / 1000)
-                codec!!.releaseOutputBuffer(outIndex, true)
-                lastRenderedPtsUs = ptsUs
-            }
-            diffUs < -50_000 -> {
-                codec!!.releaseOutputBuffer(outIndex, false)
-            }
-            else -> {
-                codec!!.releaseOutputBuffer(outIndex, true)
-                lastRenderedPtsUs = ptsUs
-            }
-        }
-    }
-
-    private fun startDecodeLoop() {
-        if (decodeThread?.isAlive == true) return
-
-        videoRunning = true
-
-        decodeThread = Thread {
-            while (videoRunning && !Thread.currentThread().isInterrupted) {
-
-                // INPUT
-                val inIndex = codec?.dequeueInputBuffer(0) ?: break
-                if (!inputEOS && inIndex >= 0) {
-                    val buffer = codec!!.getInputBuffer(inIndex)!!
-                    val size = extractor!!.readSampleData(buffer, 0)
-
-                    if (size > 0) {
-                        val pts = extractor!!.sampleTime
-                        codec!!.queueInputBuffer(inIndex, 0, size, pts, 0)
-                        extractor!!.advance()
-                    } else {
-                        codec!!.queueInputBuffer(
-                            inIndex,
-                            0,
-                            0,
-                            0,
-                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                        )
-                        inputEOS = true
-                    }
-                }
-
-                // OUTPUT
-                val info = MediaCodec.BufferInfo()
-                val outIndex = codec!!.dequeueOutputBuffer(info, 2_000)
-
-                if (outIndex >= 0) {
-                    handleVideoFrame(outIndex, info)
-                }
-            }
-        }
-
-        decodeThread!!.start()
+        video.attachSurface(surface)
     }
 
     override fun play(file: File) {
         release()
+        currentFile = file
 
-        extractor = MediaExtractor().apply {
-            setDataSource(file.absolutePath)
+        hasAudio = legacyAudio.hasAudioTrack(file)
+
+        // 🔑 ALWAYS allow render on fresh play
+        video.setRenderEnabled(true)
+
+        if (hasAudio) {
+            NativePlayer.play(context, file.absolutePath)
         }
 
-        val trackIndex = (0 until extractor!!.trackCount).firstOrNull { i ->
-            extractor!!
-                .getTrackFormat(i)
-                .getString(MediaFormat.KEY_MIME)
-                ?.startsWith("video/") == true
-        } ?: return
-
-        extractor!!.selectTrack(trackIndex)
-        val format = extractor!!.getTrackFormat(trackIndex)
-
-        durationMs =
-            if (format.containsKey(MediaFormat.KEY_DURATION))
-                format.getLong(MediaFormat.KEY_DURATION) / 1000
-            else 0
-
-        codec = MediaCodec.createDecoderByType(
-            format.getString(MediaFormat.KEY_MIME)!!
-        ).apply {
-            configure(format, surface, null, 0)
-            start()
-        }
-
-        inputEOS = false
-        lastRenderedPtsUs = Long.MIN_VALUE
-        renderEnabled = true
-
-        startDecodeLoop()
+        video.play(file)
+        playing = true
     }
 
     override fun pause() {
-        // handled by PlayerController via renderEnabled
+        if (!playing) return
+        playing = false
+
+        // 🔑 ALWAYS disable render when paused
+        video.setRenderEnabled(false)
+
+        if (hasAudio) {
+            NativePlayer.nativePause()
+        }
     }
 
     override fun resume() {
-        // handled by PlayerController via renderEnabled
+        if (playing) return
+        playing = true
+
+        // 🔑 Re-enable render BEFORE audio resumes
+        video.setRenderEnabled(true)
+
+        if (hasAudio) {
+            NativePlayer.nativeResume()
+        }
     }
 
     override fun seekTo(positionMs: Long) {
-        // handled by PlayerController (recreate video)
+        if (currentFile == null) return
+
+        val wasPlaying = playing
+        seeking = true
+        playing = false
+
+        // 🔑 HARD STOP video rendering during seek
+        video.setRenderEnabled(false)
+
+        if (hasAudio) {
+            NativePlayer.nativePause()
+            NativePlayer.nativeSeek(positionMs * 1000)
+        }
+
+        // 🔁 Recreate video cleanly
+        video.release()
+        video.play(currentFile!!)
+
+        seeking = false
+
+        if (wasPlaying) {
+            video.setRenderEnabled(true)
+            playing = true
+
+            if (hasAudio) {
+                NativePlayer.nativeResume()
+            }
+        }
     }
 
     override fun release() {
-        videoRunning = false
+        video.setRenderEnabled(false)
 
-        try {
-            decodeThread?.join()
-        } catch (_: InterruptedException) {
-        }
+        if (hasAudio) NativePlayer.release()
+        legacyAudio.release()
+        video.release()
 
-        decodeThread = null
-
-        codec?.stop()
-        codec?.release()
-        extractor?.release()
-
-        codec = null
-        extractor = null
-        durationMs = 0
+        hasAudio = false
+        playing = false
+        seeking = false
+        currentFile = null
     }
 }
