@@ -5,7 +5,6 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.view.Surface
 import java.io.File
-import kotlin.math.min
 
 class MediaCodecEngine(
     private val clock: NativeClock
@@ -16,11 +15,11 @@ class MediaCodecEngine(
     private var surface: Surface? = null
 
     @Volatile private var videoRunning = false
-    @Volatile private var renderEnabled = true   // 🔑 KEY FIX
+    @Volatile private var renderEnabled = true
     @Volatile private var inputEOS = false
 
     private var decodeThread: Thread? = null
-    private var lastRenderedPtsUs = Long.MIN_VALUE
+    private var lastRenderedPtsUs: Long = Long.MIN_VALUE
 
     override var durationMs: Long = 0
         private set
@@ -39,11 +38,14 @@ class MediaCodecEngine(
         renderEnabled = enabled
     }
 
-    private fun handleVideoFrame(outIndex: Int, info: MediaCodec.BufferInfo) {
-
-        // 🔴 HARD GATE — audio paused → do NOT render or wait
+    private fun handleVideoFrame(
+        outIndex: Int,
+        info: MediaCodec.BufferInfo
+    ) {
+        // 🔑 HARD GATE: when audio paused or seeking, never render or wait
         if (!renderEnabled) {
             codec!!.releaseOutputBuffer(outIndex, false)
+            lastRenderedPtsUs = info.presentationTimeUs
             return
         }
 
@@ -65,16 +67,7 @@ class MediaCodecEngine(
 
         when {
             diffUs > 15_000 -> {
-                var waitMs = diffUs / 1000
-                while (waitMs > 0 && renderEnabled) {
-                    val chunk = min(waitMs, 2L)
-                    Thread.sleep(chunk)
-                    waitMs -= chunk
-                }
-                if (!renderEnabled) {
-                    codec!!.releaseOutputBuffer(outIndex, false)
-                    return
-                }
+                Thread.sleep(diffUs / 1000)
                 codec!!.releaseOutputBuffer(outIndex, true)
                 lastRenderedPtsUs = ptsUs
             }
@@ -94,13 +87,13 @@ class MediaCodecEngine(
         videoRunning = true
 
         decodeThread = Thread {
-            while (videoRunning) {
+            while (videoRunning && !Thread.currentThread().isInterrupted) {
 
                 // INPUT
                 val inIndex = codec?.dequeueInputBuffer(0) ?: break
                 if (!inputEOS && inIndex >= 0) {
-                    val buf = codec!!.getInputBuffer(inIndex)!!
-                    val size = extractor!!.readSampleData(buf, 0)
+                    val buffer = codec!!.getInputBuffer(inIndex)!!
+                    val size = extractor!!.readSampleData(buffer, 0)
 
                     if (size > 0) {
                         val pts = extractor!!.sampleTime
@@ -108,7 +101,10 @@ class MediaCodecEngine(
                         extractor!!.advance()
                     } else {
                         codec!!.queueInputBuffer(
-                            inIndex, 0, 0, 0,
+                            inIndex,
+                            0,
+                            0,
+                            0,
                             MediaCodec.BUFFER_FLAG_END_OF_STREAM
                         )
                         inputEOS = true
@@ -135,15 +131,15 @@ class MediaCodecEngine(
             setDataSource(file.absolutePath)
         }
 
-        val track = (0 until extractor!!.trackCount)
-            .firstOrNull {
-                extractor!!.getTrackFormat(it)
-                    .getString(MediaFormat.KEY_MIME)
-                    ?.startsWith("video/") == true
-            } ?: return
+        val trackIndex = (0 until extractor!!.trackCount).firstOrNull { i ->
+            extractor!!
+                .getTrackFormat(i)
+                .getString(MediaFormat.KEY_MIME)
+                ?.startsWith("video/") == true
+        } ?: return
 
-        extractor!!.selectTrack(track)
-        val format = extractor!!.getTrackFormat(track)
+        extractor!!.selectTrack(trackIndex)
+        val format = extractor!!.getTrackFormat(trackIndex)
 
         durationMs =
             if (format.containsKey(MediaFormat.KEY_DURATION))
@@ -173,12 +169,17 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
-        // handled by PlayerController (destroy & recreate)
+        // handled by PlayerController (recreate video)
     }
 
     override fun release() {
         videoRunning = false
-        decodeThread?.join()
+
+        try {
+            decodeThread?.join()
+        } catch (_: InterruptedException) {
+        }
+
         decodeThread = null
 
         codec?.stop()
