@@ -68,7 +68,7 @@ class MediaCodecEngine(
             val info = MediaCodec.BufferInfo()
             var eosReached = false
 
-            while (running && !eosReached) {
+            while (running && !eosReached && !Thread.currentThread().isInterrupted) {
 
                 // INPUT
                 val inIndex = codec!!.dequeueInputBuffer(0)
@@ -99,7 +99,7 @@ class MediaCodecEngine(
             }
         }
 
-        decodeThread!!.start()
+        decodeThread?.start()
     }
 
     override fun play(file: File) {
@@ -212,6 +212,7 @@ class MediaCodecEngine(
 
     override fun release() {
         running = false
+        decodeThread?.interrupt()
 
         try {
             decodeThread?.join()
