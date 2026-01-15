@@ -59,6 +59,9 @@ class MediaCodecEngine(
 
         val audioUs = NativePlayer.getClockUs()
         if (audioUs <= 0) {
+            // OPTIONAL: You can choose to render the first frame blindly here 
+            // if you want to avoid a black screen on start, but strictly 
+            // following the clock is safer for sync.
             codec!!.releaseOutputBuffer(outIndex, false)
             return
         }
@@ -67,14 +70,20 @@ class MediaCodecEngine(
 
         when {
             diffUs > 15_000 -> {
-                Thread.sleep(diffUs / 1000)
+                // Video is early. Wait for audio.
+                // Clamp sleep to avoid massive stalls (max 500ms safety)
+                val sleepMs = (diffUs / 1000).coerceAtMost(500)
+                if (sleepMs > 0) Thread.sleep(sleepMs)
+                
                 codec!!.releaseOutputBuffer(outIndex, true)
                 lastRenderedPtsUs = ptsUs
             }
             diffUs < -50_000 -> {
+                // Video is late. Drop to catch up.
                 codec!!.releaseOutputBuffer(outIndex, false)
             }
             else -> {
+                // On time. Render.
                 codec!!.releaseOutputBuffer(outIndex, true)
                 lastRenderedPtsUs = ptsUs
             }
@@ -140,6 +149,14 @@ class MediaCodecEngine(
 
         extractor!!.selectTrack(trackIndex)
         val format = extractor!!.getTrackFormat(trackIndex)
+
+        // ✅ CRITICAL SYNC FIX:
+        // When recreating video (e.g., after a seek), we MUST jump the extractor
+        // to match the current Audio Clock. Otherwise video starts from 00:00.
+        val currentAudioUs = NativePlayer.getClockUs()
+        if (currentAudioUs > 0) {
+            extractor!!.seekTo(currentAudioUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        }
 
         durationMs =
             if (format.containsKey(MediaFormat.KEY_DURATION))
