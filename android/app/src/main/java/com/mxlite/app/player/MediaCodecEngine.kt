@@ -169,6 +169,14 @@ class MediaCodecEngine(
         extractor = MediaExtractor().apply {
             setDataSource(filePath)
         }
+        
+        // Restore hasAudio state
+        hasAudio = (0 until extractor!!.trackCount).any {
+            extractor!!.getTrackFormat(it)
+                .getString(MediaFormat.KEY_MIME)
+                ?.startsWith("audio/") == true
+        }
+        
         extractor!!.seekTo(positionMs * 1000, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
         
         val videoTrack = selectVideoTrack(extractor!!)
@@ -180,6 +188,12 @@ class MediaCodecEngine(
         extractor!!.selectTrack(videoTrack)
 
         val format = extractor!!.getTrackFormat(videoTrack)
+        
+        // Restore durationMs
+        durationMs =
+            if (format.containsKey(MediaFormat.KEY_DURATION))
+                format.getLong(MediaFormat.KEY_DURATION) / 1000
+            else 0
 
         codec = MediaCodec.createDecoderByType(
             format.getString(MediaFormat.KEY_MIME)!!
