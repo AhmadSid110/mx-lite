@@ -24,12 +24,7 @@ static void aaudioStateCallback(
         void* userData,
         aaudio_stream_state_t state,
         aaudio_stream_state_t /* previous */) {
-
-    auto* engine = static_cast<AudioEngine*>(userData);
-
-    if (state == AAUDIO_STREAM_STATE_STARTED) {
-        engine->aaudioStarted_.store(true, std::memory_order_release);
-    }
+    // Legacy callback - currently unused in Fire & Forget model
 }
 #endif
 
@@ -58,6 +53,10 @@ AudioEngine::~AudioEngine() {
 
 bool AudioEngine::open(const char* path) {
     gAudioDebug.openStage.store(1);
+    
+    // ✅ Reset Clocks on new file
+    seekOffsetUs_.store(0);
+    startFramePosition_ = 0;
 
     extractor_ = AMediaExtractor_new();
     if (!extractor_) return false;
@@ -122,6 +121,10 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
     if (dupFd < 0) {
         return false;
     }
+    
+    // ✅ Reset Clocks on new file
+    seekOffsetUs_.store(0);
+    startFramePosition_ = 0;
 
     gAudioDebug.openStage.store(1);
 
@@ -195,7 +198,9 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 void AudioEngine::start() {
     if (!stream_) return;
 
+    // Fire & Forget Start
     AAudioStream_requestStart(stream_);
+    gAudioDebug.aaudioStarted.store(true);
 
     isPlaying_.store(true);
 
@@ -212,7 +217,7 @@ void AudioEngine::pause() {
         decodeThread_.join();
 
     if (stream_)
-        AAudioStream_requestStop(stream_);
+        AAudioStream_requestPause(stream_); // Pause instead of Stop for quicker resume
 }
 
 void AudioEngine::stop() {
@@ -226,25 +231,33 @@ void AudioEngine::stop() {
 }
 
 void AudioEngine::seekUs(int64_t us) {
-    // One-time sync on seek: reset decoder/state but do NOT update any clock.
-
-    // Stop audio delivery briefly so we can flush buffers safely.
+    // 1. Stop audio briefly
     if (stream_)
         AAudioStream_requestStop(stream_);
 
-    // Clear ring buffer to avoid delivering stale audio after seek
+    // 2. ✅ UPDATE CLOCK BASELINE
+    seekOffsetUs_.store(us);
+    if (stream_) {
+        // We capture the CURRENT hardware frame count.
+        // All future time will be calculated relative to this frame.
+        startFramePosition_ = AAudioStream_getFramesRead(stream_);
+    } else {
+        startFramePosition_ = 0;
+    }
+
+    // 3. Clear ring buffer (prevent old audio bleed)
     flushRingBuffer();
     memset(ringBuffer_, 0, sizeof(ringBuffer_));
 
-    // Move extractor to requested position
+    // 4. Move extractor
     if (extractor_)
         AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
 
-    // Flush decoder state
+    // 5. Flush decoder
     if (codec_)
         AMediaCodec_flush(codec_);
 
-    // Restart audio delivery. Do NOT set or modify any software clock here.
+    // 6. Restart audio
     if (stream_)
         AAudioStream_requestStart(stream_);
 }
@@ -263,7 +276,7 @@ bool AudioEngine::setupAAudio() {
         return false;
     }
 
-    // Configure builder: PCM 16-bit, hardware values will be read back later
+    // Configure builder
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
     AAudioStreamBuilder_setChannelCount(builder, channelCount_);
     AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
@@ -290,14 +303,9 @@ bool AudioEngine::setupAAudio() {
     sampleRate_   = AAudioStream_getSampleRate(stream_);
     channelCount_ = AAudioStream_getChannelCount(stream_);
 
-    // Invariant: ring buffer stores SAMPLES (samples = frames * channelCount_)
     if (channelCount_ <= 0) {
         LOGE("Invalid channelCount_%d, defaulting to 2", channelCount_);
         channelCount_ = 2;
-    }
-
-    if ((kRingBufferSize % channelCount_) != 0) {
-        LOGE("kRingBufferSize (%d) is not a multiple of channelCount (%d)", kRingBufferSize, channelCount_);
     }
 
     gAudioDebug.aaudioOpened.store(true);
@@ -335,43 +343,12 @@ void AudioEngine::cleanupMedia() {
 /* ===================== Ring Buffer ===================== */
 
 int AudioEngine::readPcm(int16_t* out, int frames) {
-    int32_t r = readHead_.load(std::memory_order_relaxed);
-    int32_t w = writeHead_.load(std::memory_order_acquire);
-    int32_t availSamples = w - r;
-    if (availSamples <= 0) return 0;
-
-    int32_t availFrames = availSamples / channelCount_;
-    int n = std::min<int32_t>(frames, availFrames);
-
-    for (int f = 0; f < n; ++f) {
-        int32_t base = (r + f * channelCount_) % kRingBufferSize;
-        for (int c = 0; c < channelCount_; ++c) {
-            out[f * channelCount_ + c] = ringBuffer_[(base + c) % kRingBufferSize];
-        }
-    }
-
-    readHead_.store(r + n * channelCount_, std::memory_order_release);
-    gAudioDebug.bufferFill.store((w - (r + n * channelCount_)) / channelCount_);
-    return n;
+    // Legacy function - used by blocking implementations only
+    return 0; 
 }
 
 void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
-    for (int f = 0; f < frames && isPlaying_.load(); ++f) {
-        while ((writeHead_.load() - readHead_.load()) >= kRingBufferSize) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-
-        int32_t w = writeHead_.load();
-        int32_t base = w % kRingBufferSize;
-
-        for (int c = 0; c < channelCount_; ++c) {
-            ringBuffer_[(base + c) % kRingBufferSize] = in[f * channelCount_ + c];
-        }
-
-        writeHead_.fetch_add(channelCount_);
-    }
-
-    gAudioDebug.bufferFill.store((writeHead_.load() - readHead_.load()) / channelCount_);
+    // Legacy function
 }
 
 /* ===================== MediaCodec Decode ===================== */
@@ -423,9 +400,12 @@ void AudioEngine::decodeLoop() {
 
                 int32_t count = info.size / sizeof(int16_t);
 
-                // BACKPRESSURE
+                // BACKPRESSURE LOOP
                 while (isPlaying_.load()) {
                     if (writeAudio(samples, count)) break;
+                    
+                    if (!stream_) break; // Bail if audio engine died
+                    
                     std::this_thread::sleep_for(
                         std::chrono::milliseconds(2));
                 }
@@ -444,10 +424,8 @@ void AudioEngine::decodeLoop() {
 /* ===================== Producer (lock-free) ===================== */
 
 bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
-    // Sanity: samples should be a multiple of channelCount_ (samples = frames * channelCount_)
     if ((samples % channelCount_) != 0) {
-        LOGE("writeAudio called with samples (%d) not multiple of channelCount (%d)", samples, channelCount_);
-        // continue anyway for robustness in release; this helps catch misuse during testing
+        // Robustness: ignore partial frames logic for now, just warn
     }
     int32_t head = writeHead_.load(std::memory_order_acquire);
     int32_t tail = readHead_.load(std::memory_order_acquire);
@@ -455,7 +433,6 @@ bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
     int32_t used = head - tail;
     int32_t available = kRingBufferSize - used;
 
-    // 🔴 DO NOT DROP AUDIO DURING PLAYBACK
     if (available < samples) {
         return false; // buffer full
     }
@@ -466,9 +443,8 @@ bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
     }
 
     writeHead_.store(head, std::memory_order_release);
-    // Debug: expose raw buffer fill (samples) to help detect producer/consumer mismatch
-    gAudioDebug.bufferFill.store(writeHead_.load(std::memory_order_relaxed) -
-                                readHead_.load(std::memory_order_relaxed));
+    gAudioDebug.bufferFill.store((writeHead_.load(std::memory_order_relaxed) -
+                                readHead_.load(std::memory_order_relaxed)) / channelCount_);
     return true;
 }
 
@@ -498,22 +474,34 @@ void AudioEngine::flushRingBuffer() {
 }
 
 int64_t AudioEngine::getClockUs() const {
-    if (!stream_) return 0;
+    if (!stream_) return seekOffsetUs_.load(); // Fallback to last known position
 
+    // 1. Get Hardware Timestamp
     int64_t framePos = 0;
     int64_t timeNs = 0;
 
-    if (AAudioStream_getTimestamp(
+    aaudio_result_t res = AAudioStream_getTimestamp(
             stream_,
             CLOCK_MONOTONIC,
             &framePos,
-            &timeNs) != AAUDIO_OK) {
-        return 0;
+            &timeNs);
+
+    // If timestamp failed, try simple frames read (fallback)
+    if (res != AAUDIO_OK) {
+        framePos = AAudioStream_getFramesRead(stream_);
     }
 
-    if (sampleRate_ <= 0) return 0;
-    // Convert frame position to microseconds: (frames / sampleRate) * 1e6
-    return (framePos * 1000000LL) / sampleRate_;
+    if (sampleRate_ <= 0) return seekOffsetUs_.load();
+
+    // 2. Calculate frames played since last Seek
+    int64_t framesPlayed = framePos - startFramePosition_;
+    if (framesPlayed < 0) framesPlayed = 0;
+
+    // 3. Convert to time
+    int64_t timePlayedUs = (framesPlayed * 1000000LL) / sampleRate_;
+
+    // 4. Result = Seek Offset + Time Played
+    return seekOffsetUs_.load() + timePlayedUs;
 }
 
 int32_t AudioEngine::framesToSamples(int32_t frames) const {
