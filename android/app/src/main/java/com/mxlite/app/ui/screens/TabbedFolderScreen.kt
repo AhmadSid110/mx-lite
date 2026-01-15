@@ -3,14 +3,15 @@ package com.mxlite.app.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.mxlite.app.model.FolderInfo
 import com.mxlite.app.model.VideoFile
@@ -27,7 +28,7 @@ fun TabbedFolderScreen(
     onVideoClick: (VideoFile) -> Unit,
     onBack: () -> Unit
 ) {
-    // 🛡️ STEP 3: Guard against empty folders immediately
+    // 🛡️ GUARD: Empty folder check
     if (folder.videos.isEmpty()) {
         Scaffold(
             topBar = {
@@ -51,15 +52,32 @@ fun TabbedFolderScreen(
     }
 
     val tabs = listOf("All Videos", "Recent", "Large (>100MB)")
-    var selectedTabIndex by remember { mutableIntStateOf(0) }
 
-    val displayedVideos = remember(selectedTabIndex, folder.videos) {
-        when (selectedTabIndex) {
-            0 -> folder.videos
-            1 -> folder.videos.sortedByDescending { it.dateAdded }
-            2 -> folder.videos.filter { it.size > 100 * 1024 * 1024 }
-            else -> folder.videos
-        }
+    // 1. STATE SAVING: rememberSaveable ensures tab selection survives screen rotation
+    var selectedTabIndex by rememberSaveable { mutableIntStateOf(0) }
+
+    // 2. SCROLL MEMORY: Create a separate scroll state for EACH tab (remembered once to avoid reallocation)
+    val scrollStates = remember {
+        listOf(
+            androidx.compose.foundation.lazy.LazyListState(),
+            androidx.compose.foundation.lazy.LazyListState(),
+            androidx.compose.foundation.lazy.LazyListState()
+        )
+    }
+
+    // 3. PERFORMANCE: Pre-compute filtered lists ONCE
+    val recentVideos = remember(folder.videos) {
+        folder.videos.sortedByDescending { it.dateAdded }
+    }
+    val largeVideos = remember(folder.videos) {
+        folder.videos.filter { it.size > 100 * 1024 * 1024 }
+    }
+
+    val displayedVideos = when (selectedTabIndex) {
+        0 -> folder.videos
+        1 -> recentVideos
+        2 -> largeVideos
+        else -> folder.videos
     }
 
     Scaffold(
@@ -91,7 +109,6 @@ fun TabbedFolderScreen(
                     contentColor = CinemaAccent,
                     edgePadding = 16.dp,
                     indicator = { tabPositions ->
-                        // 🛡️ STEP 2: Harden Tab Indicator bounds check
                         if (selectedTabIndex < tabPositions.size) {
                             TabRowDefaults.SecondaryIndicator(
                                 modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
@@ -123,18 +140,20 @@ fun TabbedFolderScreen(
                 .padding(padding)
                 .fillMaxSize(),
             contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            // 4. APPLY SCROLL STATE
+            state = scrollStates[selectedTabIndex]
         ) {
             items(
                 items = displayedVideos,
-                // 🛡️ STEP 1: Use safe ID as key (prevents duplicate path crash)
-                key = { it.id } 
+                key = { it.id }
             ) { video ->
+                // ✅ CORRECTED: Matches Phase 3 signature (No filePath yet)
                 CompactVideoRow(
                     videoTitle = video.name,
                     duration = video.durationFormatted,
                     fileSize = video.sizeFormatted,
-                    thumbnail = null, 
+                    thumbnail = null, // Placeholder for Phase 6
                     onClick = { onVideoClick(video) }
                 )
             }
