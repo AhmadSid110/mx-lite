@@ -473,35 +473,36 @@ void AudioEngine::flushRingBuffer() {
     writeHead_.store(0);
 }
 
-int64_t AudioEngine::getClockUs() const {
-    if (!stream_) return seekOffsetUs_.load(); // Fallback to last known position
+int64_t AudioEngine::getClockUs() {
+    if (!stream_) return seekOffsetUs_.load();
 
-    // 1. Get Hardware Timestamp
+    // 🔒 PAUSE SAFETY: 
+    // If paused, hardware clock might drift or report stale values.
+    // Force return the static seek position to guarantee video freeze.
+    if (!isPlaying_) {
+        return seekOffsetUs_.load();
+    }
+
     int64_t framePos = 0;
     int64_t timeNs = 0;
 
     aaudio_result_t res = AAudioStream_getTimestamp(
-            stream_,
-            CLOCK_MONOTONIC,
-            &framePos,
-            &timeNs);
+            stream_, CLOCK_MONOTONIC, &framePos, &timeNs);
 
-    // If timestamp failed, try simple frames read (fallback)
+    // If timestamp failed, return fallback
     if (res != AAUDIO_OK) {
-        framePos = AAudioStream_getFramesRead(stream_);
+        return seekOffsetUs_.load();
     }
 
-    if (sampleRate_ <= 0) return seekOffsetUs_.load();
-
-    // 2. Calculate frames played since last Seek
+    // 1. How many frames played since the last seek/reset?
     int64_t framesPlayed = framePos - startFramePosition_;
-    if (framesPlayed < 0) framesPlayed = 0;
-
+    
+    // 2. Safe sample rate
+    int32_t rate = (sampleRate_ > 0) ? sampleRate_ : 48000;
+    
     // 3. Convert to time
-    int64_t timePlayedUs = (framesPlayed * 1000000LL) / sampleRate_;
-
-    // 4. Result = Seek Offset + Time Played
-    return seekOffsetUs_.load() + timePlayedUs;
+    // Logic: Total Time = Seek Start + Time Elapsed
+    return seekOffsetUs_.load() + (framesPlayed * 1000000LL) / rate;
 }
 
 int32_t AudioEngine::framesToSamples(int32_t frames) const {
