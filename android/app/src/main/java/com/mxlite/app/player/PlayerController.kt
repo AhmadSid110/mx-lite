@@ -60,7 +60,9 @@ class PlayerController(
         playing = false
 
         // ONLY audio pauses
-        NativePlayer.nativePause()
+        if (hasAudio) {
+            NativePlayer.nativePause()
+        }
     }
 
     override fun resume() {
@@ -69,17 +71,23 @@ class PlayerController(
         playing = true
 
         // ONLY audio resumes
-        NativePlayer.nativeResume()
+        if (hasAudio) {
+            NativePlayer.nativeResume()
+        }
     }
 
     override fun seekTo(positionMs: Long) {
         val wasPlaying = playing
 
-        // 1. Pause audio
-        NativePlayer.nativePause()
+        // 1. Pause audio (if present)
+        if (hasAudio) {
+            NativePlayer.nativePause()
+        }
 
-        // 2. Seek audio (MASTER)
-        NativePlayer.nativeSeek(positionMs * 1000)
+        // 2. Seek audio (MASTER - if present)
+        if (hasAudio) {
+            NativePlayer.nativeSeek(positionMs * 1000)
+        }
 
         // 3. RECREATE VIDEO ENGINE
         currentFile?.let { file ->
@@ -88,7 +96,7 @@ class PlayerController(
         }
 
         // 4. Resume audio if needed
-        if (wasPlaying) {
+        if (wasPlaying && hasAudio) {
             NativePlayer.nativeResume()
         }
     }
