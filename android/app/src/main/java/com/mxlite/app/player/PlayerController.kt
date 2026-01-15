@@ -3,9 +3,7 @@ class PlayerController(
 ) : PlayerEngine {
 
     private val nativeClock = NativeClock()
-    private var video: MediaCodecEngine? = null
-    private var surface: Surface? = null
-
+    private val video = MediaCodecEngine(nativeClock)
     private val legacyAudio = AudioCodecEngine()
 
     private var hasAudio = false
@@ -13,39 +11,32 @@ class PlayerController(
     private var currentFile: File? = null
 
     override val durationMs: Long
-        get() = video?.durationMs ?: 0
+        get() = video.durationMs
 
     override val currentPositionMs: Long
         get() = if (hasAudio)
             NativePlayer.getClockUs() / 1000
         else
-            video?.currentPositionMs ?: 0
+            video.currentPositionMs
 
     override val isPlaying: Boolean
         get() = playing
 
     override fun attachSurface(surface: Surface) {
-        this.surface = surface
-        video?.attachSurface(surface)
+        video.attachSurface(surface)
     }
 
     override fun play(file: File) {
         release()
-
         currentFile = file
+
         hasAudio = legacyAudio.hasAudioTrack(file)
 
-        // 1️⃣ Start audio FIRST (master)
         if (hasAudio) {
             NativePlayer.play(context, file.absolutePath)
         }
 
-        // 2️⃣ Create NEW video engine
-        video = MediaCodecEngine(clock = nativeClock).apply {
-            surface?.let { attachSurface(it) }
-            play(file)
-        }
-
+        video.play(file)
         playing = true
     }
 
@@ -53,12 +44,10 @@ class PlayerController(
         if (!playing) return
         playing = false
 
-        // ONLY pause audio
         if (hasAudio) {
+            video.setRenderEnabled(false) // 🔑 FIX
             NativePlayer.nativePause()
         }
-
-        // Video stays alive but idle
     }
 
     override fun resume() {
@@ -66,48 +55,34 @@ class PlayerController(
         playing = true
 
         if (hasAudio) {
+            video.setRenderEnabled(true) // 🔑 FIX
             NativePlayer.nativeResume()
         }
-        // Video auto-catches up using audio clock
     }
 
     override fun seekTo(positionMs: Long) {
         val wasPlaying = playing
-        playing = false
 
-        // 1️⃣ Pause audio
         if (hasAudio) {
             NativePlayer.nativePause()
             NativePlayer.nativeSeek(positionMs * 1000)
         }
 
-        // 2️⃣ DESTROY video completely
-        video?.release()
-        video = null
-
-        // 3️⃣ RECREATE video
-        currentFile?.let { file ->
-            video = MediaCodecEngine(clock = nativeClock).apply {
-                surface?.let { attachSurface(it) }
-                play(file)
-            }
+        currentFile?.let {
+            video.release()
+            video.play(it)
         }
 
-        // 4️⃣ Resume audio if needed
         if (wasPlaying && hasAudio) {
+            video.setRenderEnabled(true)
             NativePlayer.nativeResume()
-            playing = true
         }
     }
 
     override fun release() {
-        if (hasAudio) {
-            NativePlayer.release()
-        }
-
+        if (hasAudio) NativePlayer.release()
         legacyAudio.release()
-        video?.release()
-        video = null
+        video.release()
 
         hasAudio = false
         playing = false
