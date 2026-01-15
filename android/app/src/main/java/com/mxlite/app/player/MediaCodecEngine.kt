@@ -1,5 +1,14 @@
+package com.mxlite.app.player
+
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.view.Surface
+import java.io.File
+import kotlin.math.min
+
 class MediaCodecEngine(
-    private val clock: PlaybackClock
+    private val clock: NativeClock
 ) : PlayerEngine {
 
     private var extractor: MediaExtractor? = null
@@ -32,7 +41,7 @@ class MediaCodecEngine(
 
     private fun handleVideoFrame(outIndex: Int, info: MediaCodec.BufferInfo) {
 
-        // 🔴 HARD GATE — audio paused → do NOT render
+        // 🔴 HARD GATE — audio paused → do NOT render or wait
         if (!renderEnabled) {
             codec!!.releaseOutputBuffer(outIndex, false)
             return
@@ -56,7 +65,16 @@ class MediaCodecEngine(
 
         when {
             diffUs > 15_000 -> {
-                Thread.sleep(diffUs / 1000)
+                var waitMs = diffUs / 1000
+                while (waitMs > 0 && renderEnabled) {
+                    val chunk = min(waitMs, 2L)
+                    Thread.sleep(chunk)
+                    waitMs -= chunk
+                }
+                if (!renderEnabled) {
+                    codec!!.releaseOutputBuffer(outIndex, false)
+                    return
+                }
                 codec!!.releaseOutputBuffer(outIndex, true)
                 lastRenderedPtsUs = ptsUs
             }
@@ -147,20 +165,19 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        // ❌ video never pauses itself
+        // handled by PlayerController via renderEnabled
     }
 
     override fun resume() {
-        // ❌ video never resumes itself
+        // handled by PlayerController via renderEnabled
     }
 
     override fun seekTo(positionMs: Long) {
-        // ❌ handled by PlayerController (destroy & recreate)
+        // handled by PlayerController (destroy & recreate)
     }
 
     override fun release() {
         videoRunning = false
-
         decodeThread?.join()
         decodeThread = null
 
