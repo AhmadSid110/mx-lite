@@ -473,7 +473,8 @@ void AudioEngine::flushRingBuffer() {
     writeHead_.store(0);
 }
 
-int64_t AudioEngine::getClockUs() {
+// 🔴 THE FIX: ADD 'const' TO MATCH HEADER 🔴
+int64_t AudioEngine::getClockUs() const {
     if (!stream_) return seekOffsetUs_.load();
 
     // 🔒 PAUSE SAFETY: 
@@ -494,7 +495,7 @@ int64_t AudioEngine::getClockUs() {
         return seekOffsetUs_.load();
     }
 
-    // 1. How many frames played since the last seek/reset?
+    // 1. How many frames played since the last seek?
     int64_t framesPlayed = framePos - startFramePosition_;
     
     // 2. Safe sample rate
