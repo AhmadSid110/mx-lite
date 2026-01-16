@@ -24,17 +24,47 @@ class PlayerController(
     private var seeking = false
 
     // Track the currently playing content URI (if any)
+    private var playerDurationMs = 0L
+    private var isPlayingState = false
+
+    // Seek Latch State
+    private var userSeeking = false
+    private var seekPreviewMs: Long = 0
+
     override var currentUri: Uri? = null
         private set
 
     override val durationMs: Long
-        get() = video.durationMs
+        get() = NativePlayer.durationMs
 
     override val currentPositionMs: Long
-        get() = NativePlayer.virtualClockUs() / 1000
+        get() {
+            // 🔒 SEEK LATCH: If user is seeking, return preview time.
+            // This prevents the UI from fighting the advancing clock.
+            if (userSeeking) return seekPreviewMs
+            
+            // Otherwise return authoritative clock
+            if (!NativePlayer.initialized) return 0L
+            val micros = NativePlayer.virtualClockUs()
+            return if (micros < 0) 0L else micros / 1000L
+        }
 
     override val isPlaying: Boolean
-        get() = playing
+        get() = isPlayingState
+
+    override fun onSeekStart() {
+        userSeeking = true
+        seekPreviewMs = currentPositionMs
+    }
+
+    override fun onSeekPreview(positionMs: Long) {
+        seekPreviewMs = positionMs
+    }
+
+    override fun onSeekCommit(positionMs: Long) {
+        userSeeking = false
+        seekTo(positionMs)
+    }
 
     override fun attachSurface(surface: Surface) {
         video.attachSurface(surface)

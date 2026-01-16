@@ -240,8 +240,15 @@ fun PlayerScreen(
     LaunchedEffect(Unit) {
         while (true) {
             if (!dragging) {
-                positionMs = engine.currentPositionMs
-                durationMs = engine.durationMs
+                val currentPos = engine.currentPositionMs
+                val currentDur = engine.durationMs
+                
+                positionMs = currentPos
+                durationMs = currentDur
+                
+                if (currentDur > 0) {
+                    sliderPos = currentPos.toFloat() / currentDur
+                }
             }
             val effectiveTimeMs = (engine.currentPositionMs + subtitleOffsetMs).coerceAtLeast(0L)
             subtitleLine = subtitleController?.current(effectiveTimeMs)
@@ -401,22 +408,23 @@ fun PlayerScreen(
                 Slider(
                     value = sliderPos,
                     onValueChange = {
-                        dragging = true
+                        if (!dragging) {
+                            dragging = true
+                            engine.onSeekStart()
+                        }
                         sliderPos = it
+                        val seekMs = (sliderPos * displayDuration).toLong()
+                        engine.onSeekPreview(seekMs)
                     },
                     onValueChangeFinished = {
                         val seekMs = (sliderPos * displayDuration).toLong()
-                        engine.seekTo(seekMs)
+                        engine.onSeekCommit(seekMs)
                         dragging = false
                     }
                 )
 
-                LaunchedEffect(engine.currentPositionMs) {
-                    if (!dragging && engine.durationMs > 0) {
-                        sliderPos =
-                            engine.currentPositionMs.toFloat() / engine.durationMs
-                    }
-                }
+                // Removed conflicting LaunchedEffect; sliderPos is now updated in the polling loop
+
 
                 Spacer(modifier = Modifier.height(8.dp))
 

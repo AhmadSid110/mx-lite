@@ -9,7 +9,6 @@
 #include <thread>
 #include <vector>
 
-
 #include "VirtualClock.h"
 
 class AudioEngine {
@@ -25,6 +24,7 @@ public:
   void pause();
   void stop();
   void seekUs(int64_t us);
+  int64_t getDurationUs() const { return durationUs_; }
 
   // Diagnostics
   bool hasAudioTrack() const { return hasAudioTrack_; }
@@ -34,6 +34,7 @@ private:
   AMediaExtractor *extractor_ = nullptr;
   AMediaCodec *codec_ = nullptr;
   AMediaFormat *format_ = nullptr;
+  int64_t durationUs_ = 0;
 
   /* Audio */
   AAudioStream *stream_ = nullptr;
@@ -50,6 +51,9 @@ private:
   std::atomic<bool> audioOutputEnabled_{false};
   std::atomic<bool> decodeEnabled_{false};
   std::atomic<bool> threadRunning_{false};
+
+  // DEMAND-DRIVEN PACING
+  std::atomic<int32_t> framesRequested_{0};
 
   // Note: We removed the wait-for-callback logic, so this might be debug-only
   // now

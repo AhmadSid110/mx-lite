@@ -30,4 +30,9 @@ interface PlayerEngine {
     val durationMs: Long
     val currentPositionMs: Long
     val isPlaying: Boolean
+
+    // Seek Latch API
+    fun onSeekStart()
+    fun onSeekPreview(positionMs: Long)
+    fun onSeekCommit(positionMs: Long)
 }

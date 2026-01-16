@@ -351,27 +351,34 @@ class MediaCodecEngine(
 
     override fun release() {
         videoRunning = false
+        renderEnabled = false
 
         try {
             decodeThread?.join()
         } catch (_: InterruptedException) {
         }
-
         decodeThread = null
 
-        codec?.stop()
-        codec?.release()
-        extractor?.release()
+        try {
+            codec?.stop()
+            codec?.release()
+            extractor?.release()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            codec = null
+            extractor = null
+        }
 
-        // Close any open ParcelFileDescriptor we created
         try {
             currentPfd?.close()
         } catch (_: Exception) {
         }
         currentPfd = null
-
-        codec = null
-        extractor = null
         durationMs = 0
     }
+
+    override fun onSeekStart() { }
+    override fun onSeekPreview(positionMs: Long) { }
+    override fun onSeekCommit(positionMs: Long) { }
 }

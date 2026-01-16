@@ -31,6 +31,13 @@ object NativePlayer {
     private external fun nativeGetClockUs(): Long
     external fun nativePause()
     external fun nativeResume()
+    external fun nativeGetDurationUs(): Long
+
+    var initialized = false
+        private set
+
+    val durationMs: Long
+        get() = nativeGetDurationUs() / 1000L
 
     fun pause() {
         nativePause()
@@ -60,16 +67,21 @@ object NativePlayer {
             // ❗ DO NOT close pfd here
             // Native side dup()'d it
 
+            initialized = true
         } catch (e: Exception) {
             e.printStackTrace()
+            initialized = false
         }
     }
 
     fun stop() {
-        audioFocusRequest?.let {
-            audioManager?.abandonAudioFocusRequest(it)
+        if (initialized) {
+            audioFocusRequest?.let {
+                audioManager?.abandonAudioFocusRequest(it)
+            }
+            nativeStop()
         }
-        nativeStop()
+        initialized = false
     }
 
     fun seek(positionUs: Long) {
@@ -78,6 +90,7 @@ object NativePlayer {
 
     fun release() {
         nativeRelease()
+        initialized = false
     }
 
     fun virtualClockUs(): Long {
