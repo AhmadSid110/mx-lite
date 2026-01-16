@@ -7,6 +7,7 @@ add_library(
     player/AudioEngine.cpp
     player/AudioDebug.cpp
     player/Clock.cpp
+    player/VirtualClock.cpp
     JniBridge.cpp
 )
 

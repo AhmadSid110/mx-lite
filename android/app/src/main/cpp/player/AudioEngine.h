@@ -9,20 +9,20 @@
 #include <vector>
 #include <cstdint>
 
-#include "Clock.h"
+#include "VirtualClock.h"
 
 class AudioEngine {
 public:
-    explicit AudioEngine(Clock* clock);
+    explicit AudioEngine(VirtualClock* clock);
     ~AudioEngine();
 
     bool open(const char* path);
     bool openFd(int fd, int64_t offset, int64_t length);
     void start();
+    // Soft pause: never stop the AAudio stream on pause. Gate audio in the callback and in the decode loop.
     void pause();
     void stop();
     void seekUs(int64_t us);
-    int64_t getClockUs() const;
 
     // Diagnostics
     bool hasAudioTrack() const { return hasAudioTrack_; }
@@ -38,11 +38,11 @@ private:
     int32_t sampleRate_ = 0;
     int32_t channelCount_ = 0;
 
-    Clock* clock_ = nullptr;
+    VirtualClock* virtualClock_ = nullptr;
 
     /* Threading */
     std::thread decodeThread_;
-    std::atomic<bool> isPlaying_{false};
+    std::atomic<bool> clockStarted_{false};
 
     // HARD OUTPUT / DECODE GATES
     std::atomic<bool> audioOutputEnabled_{false};
@@ -58,12 +58,6 @@ private:
     std::atomic<int32_t> writeHead_{0};
     std::atomic<int32_t> readHead_{0};
     
-    /* ───────── Time Offset Variables (THE FIX) ───────── */
-    // Tracks where we seeked to (e.g., 10:00)
-    std::atomic<int64_t> seekOffsetUs_{0};  
-    // Tracks hardware frame count at the moment of seek
-    int64_t startFramePosition_ = 0;        
-
     /* Internal */
     bool setupAAudio();
     void cleanupAAudio();

@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class NativeClock : PlaybackClock {
     override val positionMs: Long
-        get() = NativePlayer.getClockUs() / 1000
+    get() = NativePlayer.virtualClockUs() / 1000
 }
 
 /**

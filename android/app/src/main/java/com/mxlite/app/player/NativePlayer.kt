@@ -80,7 +80,7 @@ object NativePlayer {
         nativeRelease()
     }
 
-    fun getClockUs(): Long {
+    fun virtualClockUs(): Long {
         return nativeGetClockUs()
     }
 

@@ -8,7 +8,6 @@
 #include <android/log.h>
 #include <algorithm>
 #include <thread>
-#include <chrono>
 #include <cstring>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -43,8 +42,8 @@ static inline int16_t floatToPcm16(float v) {
 
 /* ===================== Lifecycle ===================== */
 
-AudioEngine::AudioEngine(Clock* clock)
-        : clock_(clock) {
+AudioEngine::AudioEngine(VirtualClock* clock)
+    : virtualClock_(clock) {
     gAudioDebug.engineCreated.store(true);
 }
 
@@ -62,10 +61,6 @@ bool AudioEngine::open(const char* path) {
     // Reset audio-track flag for this new file (MANDATORY)
     hasAudioTrack_ = false;
     
-    // ✅ Reset Clocks on new file
-    seekOffsetUs_.store(0);
-    startFramePosition_ = 0;
-
     extractor_ = AMediaExtractor_new();
     if (!extractor_) return false;
 
@@ -153,10 +148,6 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
         return false;
     }
     
-    // ✅ Reset Clocks on new file
-    seekOffsetUs_.store(0);
-    startFramePosition_ = 0;
-
     gAudioDebug.openStage.store(1);
 
     extractor_ = AMediaExtractor_new();
@@ -257,49 +248,52 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 
 /* ===================== Start / Stop ===================== */
 
+/*
+ * Soft Pause Policy:
+ * - Never stop the AAudio stream on pause.
+ * - Never call driver APIs from the UI thread unless performing final release/stop.
+ * - Keep the stream alive; gate audio output in the callback and gate decoding in the decode loop.
+ * - Ensure decode loop is cooperative and non-blocking (timeout 0 on dequeue).
+ * - This avoids freezes and guarantees instant silence on pause.
+ */
+
 void AudioEngine::start() {
     if (!stream_) return;
 
-    // Enable output and decoding
-    audioOutputEnabled_.store(true);
-    decodeEnabled_.store(true);
-    isPlaying_.store(true);
+    // 🔴 REQUIRED ONCE: start the AAudio stream on the first start/play only
+    if (!aaudioStarted_.exchange(true)) {
+        aaudio_result_t r = AAudioStream_requestStart(stream_);
+        if (r != AAUDIO_OK) {
+            LOGE("AAudio start failed: %s", AAudio_convertResultToText(r));
+            return;
+        }
+        gAudioDebug.aaudioStarted.store(true);
+    }
 
-    // Fire & Forget Start
-    AAudioStream_requestStart(stream_);
+    // Start or resume the VirtualClock (authoritative time source)
+    if (!clockStarted_.exchange(true, std::memory_order_acq_rel)) {
+        virtualClock_->start();
+    } else {
+        virtualClock_->resume();
+    }
 
-    // 🔴 WAIT until frames actually advance
-    int64_t frames = 0;
-    do {
-        frames = AAudioStream_getFramesRead(stream_);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    } while (frames <= startFramePosition_);
-
-    startFramePosition_ = frames;
-    gAudioDebug.aaudioStarted.store(true);
-    // Mark audio as healthy only after hardware starts producing frames
+    audioOutputEnabled_.store(true, std::memory_order_release);
+    decodeEnabled_.store(true, std::memory_order_release);
     gAudioHealthy.store(true);
 
-    if (decodeThread_.joinable()) {
-        decodeThread_.join();
+    // Start decode thread if not already running (non-blocking)
+    if (!decodeThread_.joinable()) {
+        decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
     }
-    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
 void AudioEngine::pause() {
-    // 1. Gate output immediately (callback-safe)
+    // Soft pause only: do not stop the driver or perform blocking operations on UI thread.
+    virtualClock_->pause();
     audioOutputEnabled_.store(false, std::memory_order_release);
-    decodeEnabled_.store(false, std::memory_order_release);
-    isPlaying_.store(false, std::memory_order_release);
 
-    // 2. Request stop (async)
-    if (stream_) {
-        AAudioStream_requestStop(stream_);
-    }
-
-    // ❌ DO NOT JOIN HERE
-    // ❌ DO NOT FLUSH CODEC
-    // ❌ DO NOT TOUCH EXTRACTOR
+    // IMPORTANT: DO NOT call AAudioStream_requestStop(stream_);
+    // DO NOT join threads, flush codec, or touch extractor here.
 
     gAudioHealthy.store(false, std::memory_order_release);
 }
@@ -308,76 +302,34 @@ void AudioEngine::stop() {
     // 1️⃣ IMMEDIATELY mute audio and stop decoding
     audioOutputEnabled_.store(false, std::memory_order_release);
     decodeEnabled_.store(false, std::memory_order_release);
-    isPlaying_.store(false, std::memory_order_release);
 
-    // 2️⃣ STOP AAudio (do NOT wait)
-    if (stream_) {
-        AAudioStream_requestStop(stream_);
-    }
-
-    // 3️⃣ NOW it is safe to join decode thread
+    // 2️⃣ NOW it is safe to join decode thread
     if (decodeThread_.joinable()) {
         decodeThread_.join();
     }
 
-    // 4️⃣ Flush buffers
+    // 3️⃣ Flush buffers
     flushRingBuffer();
 
     gAudioHealthy.store(false);
 }
 
 void AudioEngine::seekUs(int64_t us) {
-    // 1. STOP EVERYTHING (non-blocking sequence)
+    // VirtualClock is the sole time authority
+    virtualClock_->seekUs(us);
+
+    // Gate audio output while we reset the pipeline
     audioOutputEnabled_.store(false, std::memory_order_release);
-    decodeEnabled_.store(false, std::memory_order_release);
-    isPlaying_.store(false, std::memory_order_release);
 
-    // Stop audio hardware immediately (do not wait)
-    if (stream_) {
-        AAudioStream_requestStop(stream_);
-    }
-
-    // Now safe to join decode thread
-    if (decodeThread_.joinable())
-        decodeThread_.join();
-
-    // 2. RESET CLOCK BASELINE
-    seekOffsetUs_.store(us);
-
-    // 3. CLEAR BUFFERS
-    flushRingBuffer();
-    memset(ringBuffer_, 0, sizeof(ringBuffer_));
-
-    // 4. RESET MEDIA PIPELINE
-    if (extractor_)
-        AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
-
+    // Reset media pipeline
     if (codec_)
         AMediaCodec_flush(codec_);
 
-    // 5. RESTART AUDIO
+    if (extractor_)
+        AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
+
+    // Re-enable audio output; do NOT touch AAudio stream state
     audioOutputEnabled_.store(true, std::memory_order_release);
-    decodeEnabled_.store(true, std::memory_order_release);
-    isPlaying_.store(true);
-
-    if (stream_) {
-        AAudioStream_requestStart(stream_);
-
-        // wait until frames move
-        int64_t frames = 0;
-        do {
-            frames = AAudioStream_getFramesRead(stream_);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } while (frames <= startFramePosition_);
-
-        startFramePosition_ = frames;
-    }
-
-    // 6. RESTART DECODE
-    if (decodeThread_.joinable()) {
-        decodeThread_.join();
-    }
-    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
 /* ===================== AAudio ===================== */
@@ -446,6 +398,7 @@ bool AudioEngine::setupAAudio() {
 
 void AudioEngine::cleanupAAudio() {
     if (stream_) {
+        // Final destroy ONLY (stream must otherwise run forever)
         AAudioStream_close(stream_);
         stream_ = nullptr;
     }
@@ -453,7 +406,7 @@ void AudioEngine::cleanupAAudio() {
 
 void AudioEngine::cleanupMedia() {
     // Ensure decoder thread is stopped before touching MediaCodec
-    isPlaying_.store(false);
+    decodeEnabled_.store(false, std::memory_order_release);
     if (decodeThread_.joinable()) {
         decodeThread_.join();
     }
@@ -486,7 +439,8 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
 /* ===================== MediaCodec Decode ===================== */
 
 void AudioEngine::decodeLoop() {
-    while (isPlaying_.load() && decodeEnabled_.load()) {
+    // Outer loop governed solely by decodeEnabled_. Exit only when this flag is cleared.
+    while (decodeEnabled_.load(std::memory_order_acquire)) {
 
         // =============================
         // INPUT STAGE (MANDATORY)
@@ -519,12 +473,19 @@ void AudioEngine::decodeLoop() {
         // OUTPUT STAGE
         // =============================
         AMediaCodecBufferInfo info;
+        // IMPORTANT: timeout must be 0 to avoid blocking the decode thread.
         ssize_t outIndex =
-            AMediaCodec_dequeueOutputBuffer(codec_, &info, 2000);
+            AMediaCodec_dequeueOutputBuffer(codec_, &info, 0);
 
         if (outIndex >= 0) {
             uint8_t* buf =
                 AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
+
+            if (virtualClock_->isPaused()) {
+                // Drop decoded PCM while paused
+                AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
+                continue;
+            }
 
             if (buf && info.size > 0) {
                 int16_t* samples =
@@ -597,44 +558,8 @@ void AudioEngine::renderAudio(int16_t* out, int32_t samples) {
 }
 
 void AudioEngine::flushRingBuffer() {
-    readHead_.store(0);
-    writeHead_.store(0);
-}
-
-// 🔴 THE FIX: ADD 'const' TO MATCH HEADER 🔴
-int64_t AudioEngine::getClockUs() const {
-    if (!stream_) return seekOffsetUs_.load();
-
-    // 🔒 PAUSE SAFETY: 
-    // If paused, hardware clock might drift or report stale values.
-    // Force return the static seek position to guarantee video freeze.
-    if (!isPlaying_) {
-        return seekOffsetUs_.load();
-    }
-
-    int64_t framePos = 0;
-    int64_t timeNs = 0;
-
-    aaudio_result_t res = AAudioStream_getTimestamp(
-            stream_, CLOCK_MONOTONIC, &framePos, &timeNs);
-
-    // If timestamp failed, return fallback
-    if (res != AAUDIO_OK) {
-        return seekOffsetUs_.load();
-    }
-
-    // 1. How many frames played since the last seek?
-    int64_t framesPlayed = framePos - startFramePosition_;
-
-    // Safety: never let clock go negative due to driver resets
-    if (framesPlayed < 0) framesPlayed = 0;
-    
-    // 2. Safe sample rate
-    int32_t rate = (sampleRate_ > 0) ? sampleRate_ : 48000;
-    
-    // 3. Convert to time
-    // Logic: Total Time = Seek Start + Time Elapsed
-    return seekOffsetUs_.load() + (framesPlayed * 1000000LL) / rate;
+    readHead_.store(0, std::memory_order_release);
+    writeHead_.store(0, std::memory_order_release);
 }
 
 int32_t AudioEngine::framesToSamples(int32_t frames) const {

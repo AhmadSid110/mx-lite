@@ -14,9 +14,9 @@ class AudioCodecEngine : PlaybackClock {
     private var sampleRate = 44100
     private var playing = false
 
-    // 🔑 MASTER CLOCK: use native AAudio hardware timestamp
+    // 🔑 MASTER CLOCK: use native VirtualClock
     override val positionMs: Long
-        get() = NativePlayer.getClockUs() / 1000
+        get() = NativePlayer.virtualClockUs() / 1000
 
     /* ───────── Public API ───────── */
 

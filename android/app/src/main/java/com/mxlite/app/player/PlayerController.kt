@@ -10,19 +10,10 @@ class PlayerController(
     private val context: Context
 ) : PlayerEngine {
 
-    private val nativeClock = NativeClock()
-    private val standaloneClock = StandaloneMediaClock()
-
     private val masterClock = object : PlaybackClock {
         override val positionMs: Long
             get() {
-                return if (hasAudio) {
-                    // Native audio track exists: audio is master
-                    NativePlayer.getClockUs() / 1000
-                } else {
-                    // No audio track: standalone clock is master
-                    standaloneClock.positionUs() / 1000
-                }
+                return NativePlayer.virtualClockUs() / 1000
             }
     }
 
@@ -32,11 +23,6 @@ class PlayerController(
     private var playing = false
     private var seeking = false
 
-    // Latch the UI position when paused so the UI freezes cleanly
-    private var pausedPositionMs: Long = 0
-    // Tracks whether we've observed a valid audio clock after resume/seek
-    private var audioClockReady = false
-
     // Track the currently playing content URI (if any)
     override var currentUri: Uri? = null
         private set
@@ -45,23 +31,7 @@ class PlayerController(
         get() = video.durationMs
 
     override val currentPositionMs: Long
-        get() {
-        // 🔒 Absolute freeze when not playing
-        if (!playing) {
-            return pausedPositionMs
-        }
-
-        // 🔒 Never trust audio until it advances
-        if (hasAudio) {
-            val us = NativePlayer.getClockUs()
-            if (us <= pausedPositionMs * 1000L) {
-                return pausedPositionMs
-            }
-            return us / 1000
-        }
-
-        return pausedPositionMs
-        }
+        get() = NativePlayer.virtualClockUs() / 1000
 
     override val isPlaying: Boolean
         get() = playing
@@ -87,7 +57,6 @@ class PlayerController(
         release()
 
         // 🔒 INITIAL BASELINE: ensure UI is latched at 0 and audio is not marked playing
-        pausedPositionMs = 0L
         playing = false
 
         currentUri = uri
@@ -104,19 +73,14 @@ class PlayerController(
                 )
                 .show()
 
-            // Ensure UI clock advances even if audio hasn't started or will fail
-            standaloneClock.start(0L)
-
             NativePlayer.playFd(pfd.fd, 0L, -1)
 
             // Query native engine to see whether an audio track actually exists
             hasAudio = NativePlayer.dbgHasAudioTrack()
 
-            // If audio is already healthy immediately, sync the standalone clock so handoff is seamless
-            if (NativePlayer.isAudioClockHealthy()) {
-                val audioUs = NativePlayer.getClockUs()
-                standaloneClock.start(audioUs)
-            }
+            // 🔴 REQUIRED: reflect native start in UI state immediately
+            playing = true
+            
 
             android.widget.Toast
                 .makeText(
@@ -140,29 +104,25 @@ class PlayerController(
     }
 
     override fun pause() {
-        // Latch current position so UI freezes immediately
-        pausedPositionMs = currentPositionMs
+        // Reflect non-playing state immediately
+        playing = false
 
         // 🔒 ALWAYS pause native audio (idempotent)
         NativePlayer.nativePause()
-
-        // Pause video rendering & decode
-        video.pause()
-
-        playing = false
     }
 
     override fun resume() {
         video.prepareResume()
+
         NativePlayer.nativeResume()
+
+        // Always reflect resumed state in UI immediately
         playing = true
     }
 
     override fun seekTo(positionMs: Long) {
-        pausedPositionMs = positionMs
         playing = false
 
-        NativePlayer.nativePause()
         NativePlayer.nativeSeek(positionMs * 1000L)
 
         video.seekToAudioClock()

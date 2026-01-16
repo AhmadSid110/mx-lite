@@ -34,7 +34,7 @@ class MediaCodecEngine(
         private set
 
     override val currentPositionMs: Long
-        get() = clock.positionMs
+        get() = NativePlayer.virtualClockUs() / 1000
 
     override val isPlaying: Boolean
         get() = videoRunning
@@ -71,8 +71,8 @@ class MediaCodecEngine(
             return
         }
 
-        // Use the master clock (provided by PlayerController) so video never blocks on audio
-        val masterUs = clock.positionMs * 1000
+        // Use VirtualClock so video never blocks on audio
+        val masterUs = NativePlayer.virtualClockUs()
         if (masterUs <= 0) {
             // OPTIONAL: You can choose to render the first frame blindly here 
             // if you want to avoid a black screen on start, but strictly 
@@ -82,25 +82,16 @@ class MediaCodecEngine(
         }
 
         val diffUs = ptsUs - masterUs
-
-        // Defensive: drop frames that are extremely late (e.g., after fast seeks)
-        if (diffUs < -500_000) {
-            // Drop badly late frames to avoid long catch-up stalls and visual glitches
-            codec!!.releaseOutputBuffer(outIndex, false)
-            return
-        }
-
         when {
             diffUs > 15_000 -> {
-                // Video is early. Wait for audio.
-                // Clamp sleep to avoid massive stalls (max 500ms safety)
-                val sleepMs = (diffUs / 1000).coerceAtMost(500)
+                // Video is early. Wait for VirtualClock.
+                val sleepMs = diffUs / 1000
                 if (sleepMs > 0) Thread.sleep(sleepMs)
-                
+
                 codec!!.releaseOutputBuffer(outIndex, true)
                 lastRenderedPtsUs = ptsUs
             }
-            diffUs < -50_000 -> {
+            diffUs < -60_000 -> {
                 // Video is late. Drop to catch up.
                 codec!!.releaseOutputBuffer(outIndex, false)
             }
@@ -204,7 +195,7 @@ class MediaCodecEngine(
             android.util.Log.e("MX-VIDEO", "Creating codec for ${format.getString(MediaFormat.KEY_MIME)}")
 
             // Sync Extractor logic (Keep this!)
-            val masterUs = clock.positionMs * 1000
+            val masterUs = NativePlayer.virtualClockUs()
             if (masterUs > 0) {
                 extractor!!.seekTo(masterUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
             } else {
@@ -290,10 +281,10 @@ class MediaCodecEngine(
         // Flush decoder but do NOT recreate codec/extractor
         try { codec?.flush() } catch (_: Exception) {}
 
-        val audioUs = NativePlayer.getClockUs()
-        if (audioUs > 0) {
+        val clockUs = NativePlayer.virtualClockUs()
+        if (clockUs > 0) {
             extractor?.seekTo(
-                audioUs,
+                clockUs,
                 MediaExtractor.SEEK_TO_CLOSEST_SYNC
             )
         } else {

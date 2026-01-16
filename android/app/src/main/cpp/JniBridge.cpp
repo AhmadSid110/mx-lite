@@ -3,7 +3,7 @@
 #define LOGE(tag, fmt, ...) __android_log_print(ANDROID_LOG_ERROR, tag, fmt, ##__VA_ARGS__)
 
 #include "player/AudioEngine.h"
-#include "player/Clock.h"
+#include "player/VirtualClock.h"
 #include "player/AudioDebug.h"
 #include <aaudio/AAudio.h>
 #include <atomic>
@@ -11,7 +11,7 @@
 /*
  * Global singletons
  */
-static Clock gClock;
+static VirtualClock gVirtualClock;
 static AudioEngine* gAudio = nullptr;
 
 /*
@@ -36,7 +36,7 @@ Java_com_mxlite_app_player_NativePlayer_nativePlay(
     const char* cpath = env->GetStringUTFChars(path, nullptr);
 
     if (!gAudio) {
-        gAudio = new AudioEngine(&gClock);
+        gAudio = new AudioEngine(&gVirtualClock);
     }
 
     if (gAudio->open(cpath)) {
@@ -56,7 +56,7 @@ Java_com_mxlite_app_player_NativePlayer_nativePlayFd(
         jlong length) {
 
     if (!gAudio) {
-        gAudio = new AudioEngine(&gClock);
+        gAudio = new AudioEngine(&gVirtualClock);
     }
 
     if (gAudio->openFd(fd, offset, length)) {
@@ -84,6 +84,8 @@ Java_com_mxlite_app_player_NativePlayer_nativeSeek(
 
     if (gAudio) {
         gAudio->seekUs((int64_t) posUs);
+    } else {
+        gVirtualClock.seekUs((int64_t) posUs);
     }
 }
 
@@ -94,7 +96,7 @@ Java_com_mxlite_app_player_NativePlayer_nativeRelease(
         jobject) {
 
     if (gAudio) {
-        // Ensure stream is stopped before deleting to avoid dangling callbacks
+        // Ensure decoder thread stops before deleting
         gAudio->stop();
         delete gAudio;
         gAudio = nullptr;
@@ -107,7 +109,11 @@ Java_com_mxlite_app_player_NativePlayer_nativePause(
         JNIEnv*,
         jobject) {
 
-    if (gAudio) gAudio->pause();
+    if (gAudio) {
+        gAudio->pause();
+    } else {
+        gVirtualClock.pause();
+    }
 }
 
 extern "C"
@@ -116,7 +122,11 @@ Java_com_mxlite_app_player_NativePlayer_nativeResume(
         JNIEnv*,
         jobject) {
 
-    if (gAudio) gAudio->start();
+    if (gAudio) {
+        gAudio->start();
+    } else {
+        gVirtualClock.resume();
+    }
 }
 
 /* ───────────────────────────── */
@@ -129,11 +139,7 @@ Java_com_mxlite_app_player_NativePlayer_nativeGetClockUs(
         JNIEnv*,
         jobject) {
 
-    if (gAudio) {
-        return gAudio->getClockUs();
-    }
-
-    return 0;
+    return gVirtualClock.positionUs();
 }
 
 /* ───────────────────────────── */
@@ -253,8 +259,11 @@ Java_com_mxlite_app_player_NativePlayer_playFd(
 
     if (!gAudio) {
         LOGE("MX-AUDIO", "AudioEngine is NULL, creating new AudioEngine");
-        gAudio = new AudioEngine(&gClock);
+        gAudio = new AudioEngine(&gVirtualClock);
     }
+
+    // Mark native play call for diagnostics
+    gAudioDebug.nativePlayCalled.store(true);
 
     bool ok = gAudio->openFd(fd, offset, length);
     if (!ok) {
