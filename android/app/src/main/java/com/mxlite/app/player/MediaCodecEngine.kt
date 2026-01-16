@@ -83,6 +83,13 @@ class MediaCodecEngine(
 
         val diffUs = ptsUs - masterUs
 
+        // Defensive: drop frames that are extremely late (e.g., after fast seeks)
+        if (diffUs < -500_000) {
+            // Drop badly late frames to avoid long catch-up stalls and visual glitches
+            codec!!.releaseOutputBuffer(outIndex, false)
+            return
+        }
+
         when {
             diffUs > 15_000 -> {
                 // Video is early. Wait for audio.
@@ -256,11 +263,47 @@ class MediaCodecEngine(
     }
 
     override fun resume() {
-        // handled by PlayerController via renderEnabled
+        // handled by PlayerController via renderEnabled & prepareResume
     }
 
     override fun seekTo(positionMs: Long) {
-        // handled by PlayerController (recreate video)
+        // handled by PlayerController using seekToAudioClock() for precise alignment
+    }
+
+    // Seek video extractor to the current native audio clock without recreating pipeline
+    fun seekToAudioClock() {
+        // Stop decode loop
+        videoRunning = false
+        try {
+            decodeThread?.join()
+        } catch (_: InterruptedException) {
+        }
+        decodeThread = null
+
+        // Flush decoder but do NOT recreate codec/extractor
+        try { codec?.flush() } catch (_: Exception) {}
+
+        val audioUs = NativePlayer.getClockUs()
+        if (audioUs > 0) {
+            extractor?.seekTo(
+                audioUs,
+                MediaExtractor.SEEK_TO_CLOSEST_SYNC
+            )
+        } else {
+            extractor?.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        }
+
+        lastRenderedPtsUs = Long.MIN_VALUE
+
+        // Restart decode loop
+        videoRunning = true
+        startDecodeLoop()
+    }
+
+    // Prepare internal renderer state before resuming audio clock
+    fun prepareResume() {
+        lastRenderedPtsUs = Long.MIN_VALUE
+        renderEnabled = true
     }
 
     // Detach surface without stopping audio or destroying the engine's PFD

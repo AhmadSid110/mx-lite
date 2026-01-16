@@ -32,6 +32,9 @@ class PlayerController(
     private var playing = false
     private var seeking = false
 
+    // Latch the UI position when paused so the UI freezes cleanly
+    private var pausedPositionMs: Long = 0
+
     // Track the currently playing content URI (if any)
     override var currentUri: Uri? = null
         private set
@@ -41,7 +44,10 @@ class PlayerController(
 
     override val currentPositionMs: Long
         get() {
-            return if (hasAudio) {
+            return if (!playing) {
+                // When paused, show the latched position.
+                pausedPositionMs
+            } else if (hasAudio) {
                 // Native audio track exists: audio is master
                 NativePlayer.getClockUs() / 1000
             } else {
@@ -122,7 +128,9 @@ class PlayerController(
 
     override fun pause() {
         if (!playing) return
-        playing = false
+
+        // Latch current position so UI freezes immediately
+        pausedPositionMs = currentPositionMs
 
         // 🔑 ALWAYS disable render when paused
         video.setRenderEnabled(false)
@@ -130,55 +138,75 @@ class PlayerController(
         if (hasAudio) {
             NativePlayer.nativePause()
         }
+
+        playing = false
     }
 
     override fun resume() {
         if (playing) return
-        playing = true
 
         // 🔑 Re-enable render BEFORE audio resumes
         video.setRenderEnabled(true)
 
         if (hasAudio) {
+            // Prepare video before starting the native audio clock
+            video.prepareResume()
             NativePlayer.nativeResume()
             if (NativePlayer.isAudioClockHealthy()) {
                 val audioUs = NativePlayer.getClockUs()
                 standaloneClock.start(audioUs)
             }
         }
+
+        // Finally mark playing true — do not reset pausedPositionMs to avoid a UI jump
+        playing = true
     }
 
     override fun seekTo(positionMs: Long) {
         if (currentUri == null) return
+        if (seeking) return
+        if (durationMs <= 0) return
 
         val wasPlaying = playing
+
+        // One-shot seek guard
         seeking = true
         playing = false
 
-        // 🔑 HARD STOP video rendering during seek
-        video.setRenderEnabled(false)
-
-        if (hasAudio) {
-            NativePlayer.nativePause()
-            NativePlayer.nativeSeek(positionMs * 1000)
-        }
-
-        // 🔁 Recreate video cleanly (do NOT restart audio here)
-        video.recreateVideo()
-
-        seeking = false
-
-        if (wasPlaying) {
-            video.setRenderEnabled(true)
-            playing = true
+        try {
+            // 🔑 HARD STOP video rendering during seek
+            video.setRenderEnabled(false)
 
             if (hasAudio) {
-                NativePlayer.nativeResume()
-                if (NativePlayer.isAudioClockHealthy()) {
-                    val audioUs = NativePlayer.getClockUs()
-                    standaloneClock.start(audioUs)
-                }
+                NativePlayer.nativePause()
+                NativePlayer.nativeSeek(positionMs * 1000)
+
+                // Latch the paused position immediately so UI updates
+                pausedPositionMs = positionMs
+
+                // Align video extractor with the audio clock instead of recreating
+                video.seekToAudioClock()
+            } else {
+                // No audio: safely recreate the video pipeline
+                video.recreateVideo()
             }
+
+            if (wasPlaying) {
+                video.setRenderEnabled(true)
+                playing = true
+
+                if (hasAudio) {
+                        // Prepare the video pipeline BEFORE resuming audio
+                        video.prepareResume()
+                        NativePlayer.nativeResume()
+                        if (NativePlayer.isAudioClockHealthy()) {
+                            val audioUs = NativePlayer.getClockUs()
+                            standaloneClock.start(audioUs)
+                        }
+                    }
+            }
+        } finally {
+            seeking = false
         }
     }
 
