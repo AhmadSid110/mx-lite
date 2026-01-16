@@ -27,6 +27,12 @@ void VirtualClock::seekUs(int64_t us) {
     pausedUs_.store(us);
 }
 
+void VirtualClock::reset() {
+    baseUs_.store(0);
+    pausedUs_.store(0);
+    paused_.store(true);
+}
+
 int64_t VirtualClock::positionUs() const {
     if (paused_.load()) return pausedUs_.load();
     return nowUs() - baseUs_.load();

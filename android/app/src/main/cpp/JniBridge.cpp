@@ -101,6 +101,7 @@ Java_com_mxlite_app_player_NativePlayer_nativeRelease(
         delete gAudio;
         gAudio = nullptr;
     }
+    gVirtualClock.reset();
 }
 
 extern "C"

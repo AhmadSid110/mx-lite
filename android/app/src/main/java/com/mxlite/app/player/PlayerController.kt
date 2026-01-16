@@ -121,11 +121,21 @@ class PlayerController(
     }
 
     override fun seekTo(positionMs: Long) {
-        playing = false
+        // 🔒 SEEK SEQUENCE (Final Form)
+        // 1. Soft Pause Audio (idempotent, no driver calls)
+        NativePlayer.pause()
 
+        // 2. Seek Native Clock (atomic)
         NativePlayer.nativeSeek(positionMs * 1000L)
 
+        // 3. Seek Video (matches audio clock)
         video.seekToAudioClock()
+
+        // 4. Resume Audio (restores flow)
+        NativePlayer.nativeResume()
+
+        // Reflect playing state
+        playing = true
     }
 
     override fun release() {

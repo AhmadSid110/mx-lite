@@ -8,6 +8,7 @@ public:
     void pause();
     void resume();
     void seekUs(int64_t us);
+    void reset();
 
     int64_t positionUs() const;
     bool isPaused() const;
