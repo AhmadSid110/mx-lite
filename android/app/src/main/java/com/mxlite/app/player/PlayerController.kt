@@ -109,10 +109,14 @@ class PlayerController(
 
         // 🔒 ALWAYS pause native audio (idempotent)
         NativePlayer.nativePause()
+        
+        // 🔒 SOFT PAUSE video (stop decoding)
+        video.pause()
     }
 
     override fun resume() {
         video.prepareResume()
+        video.resume() // Ensure decodeEnabled = true
 
         NativePlayer.nativeResume()
 

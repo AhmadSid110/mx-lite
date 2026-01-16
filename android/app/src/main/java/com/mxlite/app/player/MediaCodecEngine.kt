@@ -25,6 +25,7 @@ class MediaCodecEngine(
     @Volatile private var surfaceReady = false
     @Volatile private var videoRunning = false
     @Volatile private var renderEnabled = true
+    @Volatile private var decodeEnabled = false
     @Volatile private var inputEOS = false
 
     private var decodeThread: Thread? = null
@@ -107,9 +108,20 @@ class MediaCodecEngine(
         if (decodeThread?.isAlive == true) return
 
         videoRunning = true
+        decodeEnabled = true
 
         decodeThread = Thread {
             while (videoRunning && !Thread.currentThread().isInterrupted) {
+
+                // 🔑 HARD GATE: Decode should not run when disabled (paused)
+                if (!decodeEnabled) {
+                    try {
+                        Thread.sleep(2)
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                    continue
+                }
 
                 // INPUT
                 val inIndex = codec?.dequeueInputBuffer(0) ?: break
@@ -250,17 +262,15 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        // Stop rendering and stop decode loop but keep extractor and PFD so we can resume quickly
+        // SOFT PAUSE: stop decoding/rendering but keep thread alive
         renderEnabled = false
-        videoRunning = false
-        try {
-            decodeThread?.join()
-        } catch (_: InterruptedException) {
-        }
-        decodeThread = null
+        decodeEnabled = false
+        // do NOT set videoRunning=false or join thread
     }
 
     override fun resume() {
+        decodeEnabled = true
+        renderEnabled = true
         // handled by PlayerController via renderEnabled & prepareResume
     }
 
@@ -302,6 +312,7 @@ class MediaCodecEngine(
     fun prepareResume() {
         lastRenderedPtsUs = Long.MIN_VALUE
         renderEnabled = true
+        decodeEnabled = true
     }
 
     // Detach surface without stopping audio or destroying the engine's PFD
