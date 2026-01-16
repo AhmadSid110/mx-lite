@@ -189,7 +189,6 @@ fun CompactVideoRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
 
     Row(
         modifier = modifier

@@ -42,7 +42,7 @@ object NativePlayer {
 
     /* ================= PUBLIC API ================= */
 
-    fun play(context: Context, path: String) {
+    fun play(path: String) {
         try {
             val file = File(path)
 

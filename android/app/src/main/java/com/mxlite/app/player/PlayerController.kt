@@ -34,6 +34,8 @@ class PlayerController(
 
     // Latch the UI position when paused so the UI freezes cleanly
     private var pausedPositionMs: Long = 0
+    // Tracks whether we've observed a valid audio clock after resume/seek
+    private var audioClockReady = false
 
     // Track the currently playing content URI (if any)
     override var currentUri: Uri? = null
@@ -44,16 +46,21 @@ class PlayerController(
 
     override val currentPositionMs: Long
         get() {
-            return if (!playing) {
-                // When paused, show the latched position.
-                pausedPositionMs
-            } else if (hasAudio) {
-                // Native audio track exists: audio is master
-                NativePlayer.getClockUs() / 1000
-            } else {
-                // Standalone clock takes over
-                standaloneClock.positionUs() / 1000
+        // 🔒 Absolute freeze when not playing
+        if (!playing) {
+            return pausedPositionMs
+        }
+
+        // 🔒 Never trust audio until it advances
+        if (hasAudio) {
+            val us = NativePlayer.getClockUs()
+            if (us <= pausedPositionMs * 1000L) {
+                return pausedPositionMs
             }
+            return us / 1000
+        }
+
+        return pausedPositionMs
         }
 
     override val isPlaying: Boolean
@@ -76,8 +83,14 @@ class PlayerController(
         // TEMPORARILY disable ALL guards
         // if (currentUri == uri && playing) return
 
+        // Ensure any existing resources are released before starting new playback
+        release()
+
+        // 🔒 INITIAL BASELINE: ensure UI is latched at 0 and audio is not marked playing
+        pausedPositionMs = 0L
+        playing = false
+
         currentUri = uri
-        playing = true
 
         try {
             val pfd = context.contentResolver.openFileDescriptor(uri, "r")
@@ -127,87 +140,32 @@ class PlayerController(
     }
 
     override fun pause() {
-        if (!playing) return
-
         // Latch current position so UI freezes immediately
         pausedPositionMs = currentPositionMs
 
-        // 🔑 ALWAYS disable render when paused
-        video.setRenderEnabled(false)
+        // 🔒 ALWAYS pause native audio (idempotent)
+        NativePlayer.nativePause()
 
-        if (hasAudio) {
-            NativePlayer.nativePause()
-        }
+        // Pause video rendering & decode
+        video.pause()
 
         playing = false
     }
 
     override fun resume() {
-        if (playing) return
-
-        // 🔑 Re-enable render BEFORE audio resumes
-        video.setRenderEnabled(true)
-
-        if (hasAudio) {
-            // Prepare video before starting the native audio clock
-            video.prepareResume()
-            NativePlayer.nativeResume()
-            if (NativePlayer.isAudioClockHealthy()) {
-                val audioUs = NativePlayer.getClockUs()
-                standaloneClock.start(audioUs)
-            }
-        }
-
-        // Finally mark playing true — do not reset pausedPositionMs to avoid a UI jump
+        video.prepareResume()
+        NativePlayer.nativeResume()
         playing = true
     }
 
     override fun seekTo(positionMs: Long) {
-        if (currentUri == null) return
-        if (seeking) return
-        if (durationMs <= 0) return
-
-        val wasPlaying = playing
-
-        // One-shot seek guard
-        seeking = true
+        pausedPositionMs = positionMs
         playing = false
 
-        try {
-            // 🔑 HARD STOP video rendering during seek
-            video.setRenderEnabled(false)
+        NativePlayer.nativePause()
+        NativePlayer.nativeSeek(positionMs * 1000L)
 
-            if (hasAudio) {
-                NativePlayer.nativePause()
-                NativePlayer.nativeSeek(positionMs * 1000)
-
-                // Latch the paused position immediately so UI updates
-                pausedPositionMs = positionMs
-
-                // Align video extractor with the audio clock instead of recreating
-                video.seekToAudioClock()
-            } else {
-                // No audio: safely recreate the video pipeline
-                video.recreateVideo()
-            }
-
-            if (wasPlaying) {
-                video.setRenderEnabled(true)
-                playing = true
-
-                if (hasAudio) {
-                        // Prepare the video pipeline BEFORE resuming audio
-                        video.prepareResume()
-                        NativePlayer.nativeResume()
-                        if (NativePlayer.isAudioClockHealthy()) {
-                            val audioUs = NativePlayer.getClockUs()
-                            standaloneClock.start(audioUs)
-                        }
-                    }
-            }
-        } finally {
-            seeking = false
-        }
+        video.seekToAudioClock()
     }
 
     override fun release() {
@@ -232,7 +190,7 @@ class PlayerController(
 
     // Recreate video safely using the last known URI
     override fun recreateVideo() {
-        val uri = currentUri ?: return
+        if (currentUri == null) return
 
         // Avoid restarting if video engine is already running
         if (video.isPlaying) return

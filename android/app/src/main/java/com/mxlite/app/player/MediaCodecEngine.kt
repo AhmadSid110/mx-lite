@@ -259,7 +259,14 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        // handled by PlayerController via renderEnabled
+        // Stop rendering and stop decode loop but keep extractor and PFD so we can resume quickly
+        renderEnabled = false
+        videoRunning = false
+        try {
+            decodeThread?.join()
+        } catch (_: InterruptedException) {
+        }
+        decodeThread = null
     }
 
     override fun resume() {

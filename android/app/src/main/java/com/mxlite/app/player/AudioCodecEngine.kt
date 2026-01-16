@@ -70,16 +70,25 @@ class AudioCodecEngine : PlaybackClock {
         // 🔴 CRITICAL: large buffer to avoid underruns
         val bufferSize = max(minBuffer * 4, 262144)
 
-        audioTrack = AudioTrack(
-            AudioManager.STREAM_MUSIC,
-            sampleRate,
-            channelConfig,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize,
-            AudioTrack.MODE_STREAM
-        ).apply {
-            play()
-        }
+        val audioFormat = AudioFormat.Builder()
+            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+            .setChannelMask(channelConfig)
+            .setSampleRate(sampleRate)
+            .build()
+
+        val audioAttrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(audioAttrs)
+            .setAudioFormat(audioFormat)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .setBufferSizeInBytes(bufferSize)
+            .build().apply {
+                play()
+            }
 
         codec = MediaCodec.createDecoderByType(mime).apply {
             configure(format, null, null, 0)

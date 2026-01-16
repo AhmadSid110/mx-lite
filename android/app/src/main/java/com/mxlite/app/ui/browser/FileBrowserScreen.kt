@@ -43,8 +43,7 @@ private fun extractFolderDisplayName(folder: String?): String =
 @Composable
 fun FileBrowserScreen(
     onFileSelected: (File) -> Unit,
-    initialFolder: String? = null,
-    onNavigateHome: (() -> Unit)? = null
+    initialFolder: String? = null
 ) {
     val context = LocalContext.current
     val store = remember { StorageStore(context) }
@@ -134,7 +133,7 @@ fun FileBrowserScreen(
                     }
                 }
             }
-            Divider()
+            HorizontalDivider()
         }
 
         /* ───────── SAF browsing ───────── */

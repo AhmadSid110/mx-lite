@@ -72,6 +72,7 @@ private const val MaxTrackDisplayNameLength = 15
 
 
 @OptIn(ExperimentalMaterial3Api::class)
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun PlayerScreen(
     uri: android.net.Uri,
@@ -112,7 +113,6 @@ fun PlayerScreen(
     var subtitleBottomMargin by remember { mutableStateOf(48f) }
     var subtitleError by remember { mutableStateOf<String?>(null) }
     var selectedTrackId by remember { mutableStateOf<String?>(null) }
-    var showTrackSelector by remember { mutableStateOf(false) }
     
     // Audio track selection state
     var availableAudioTracks by remember { mutableStateOf<List<AudioTrackInfo>>(emptyList()) }
@@ -130,12 +130,12 @@ fun PlayerScreen(
     val subtitlePicker =
         rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocument()
-        ) { uri: Uri? ->
-            if (uri != null) {
+        ) { pickedUri: Uri? ->
+            if (pickedUri != null) {
                 scope.launch {
-                    val docFile = DocumentFile.fromSingleUri(context, uri)
+                    val docFile = DocumentFile.fromSingleUri(context, pickedUri)
                     val track = SubtitleTrack.SafTrack(
-                        uri = uri,
+                        uri = pickedUri,
                         name = docFile?.name ?: "Subtitle"
                     )
                     subtitleController?.addTrack(track)
@@ -396,7 +396,7 @@ fun PlayerScreen(
                     .padding(16.dp)
             ) {
 
-                var displayDuration = durationMs.coerceAtLeast(1L)
+                val displayDuration = durationMs.coerceAtLeast(1L)
 
                 Slider(
                     value = sliderPos,
@@ -405,7 +405,7 @@ fun PlayerScreen(
                         sliderPos = it
                     },
                     onValueChangeFinished = {
-                        val seekMs = (sliderPos * engine.durationMs).toLong()
+                        val seekMs = (sliderPos * displayDuration).toLong()
                         engine.seekTo(seekMs)
                         dragging = false
                     }
