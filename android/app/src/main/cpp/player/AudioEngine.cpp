@@ -532,23 +532,15 @@ void AudioEngine::decodeLoop() {
 
                 int32_t count = info.size / sizeof(int16_t);
 
-                // BACKPRESSURE LOOP
-                while (isPlaying_.load()) {
-                    if (writeAudio(samples, count)) break;
-                    
-                    if (!stream_) break; // Bail if audio engine died
-                    
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(2));
-                }
+                // Fire-and-forget write: do not block or wait for space.
+                // If the ring buffer is full, drop this chunk to avoid blocking.
+                (void)writeAudio(samples, count);
             }
 
             AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
         }
-        else if (outIndex ==
-                 AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(2));
+        else if (outIndex == AMEDIACODEC_INFO_TRY_AGAIN_LATER) {
+            // No blocking here; simply continue the decode loop.
         }
     }
 }
@@ -557,16 +549,18 @@ void AudioEngine::decodeLoop() {
 
 bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
     if ((samples % channelCount_) != 0) {
-        // Robustness: ignore partial frames logic for now, just warn
+        // Robustness: ignore partial frames logic for now
     }
-    int32_t head = writeHead_.load(std::memory_order_acquire);
+
+    // Load head relaxed (producer local), tail acquire to observe consumer progress
+    int32_t head = writeHead_.load(std::memory_order_relaxed);
     int32_t tail = readHead_.load(std::memory_order_acquire);
 
-    int32_t used = head - tail;
-    int32_t available = kRingBufferSize - used;
-
+    // Compute available space; if insufficient, drop audio (never wait)
+    int32_t available = kRingBufferSize - (head - tail);
     if (available < samples) {
-        return false; // buffer full
+        // Drop: do not block
+        return false;
     }
 
     for (int32_t i = 0; i < samples; i++) {
@@ -574,7 +568,9 @@ bool AudioEngine::writeAudio(const int16_t* data, int32_t samples) {
         head++;
     }
 
+    // Publish new head (release)
     writeHead_.store(head, std::memory_order_release);
+    // Update debug info with relaxed reads
     gAudioDebug.bufferFill.store((writeHead_.load(std::memory_order_relaxed) -
                                 readHead_.load(std::memory_order_relaxed)) / channelCount_);
     return true;
