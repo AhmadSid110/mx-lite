@@ -24,6 +24,9 @@ public:
     void seekUs(int64_t us);
     int64_t getClockUs() const;
 
+    // Diagnostics
+    bool hasAudioTrack() const { return hasAudioTrack_; }
+
 private:
     /* Media */
     AMediaExtractor* extractor_ = nullptr;
@@ -40,6 +43,10 @@ private:
     /* Threading */
     std::thread decodeThread_;
     std::atomic<bool> isPlaying_{false};
+
+    // HARD OUTPUT / DECODE GATES
+    std::atomic<bool> audioOutputEnabled_{false};
+    std::atomic<bool> decodeEnabled_{false};
     
     // Note: We removed the wait-for-callback logic, so this might be debug-only now
     std::atomic<bool> aaudioStarted_{false}; 
@@ -62,7 +69,14 @@ private:
     void cleanupAAudio();
     void cleanupMedia();
 
+    // Internal state
+    bool hasAudioTrack_ = false;
+
+    // Diagnostics / state (public accessor declared in public section)
+    
     void decodeLoop();
+
+    // These helpers seem legacy or debug, keeping them if you use them internally
     
     // These helpers seem legacy or debug, keeping them if you use them internally
     void writePcmBlocking(const int16_t* in, int frames);

@@ -235,6 +235,14 @@ Java_com_mxlite_app_player_NativePlayer_dbgOpenStage(
 }
 
 extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgHasAudioTrack(
+        JNIEnv*, jobject) {
+    if (!gAudio) return JNI_FALSE;
+    return gAudio->hasAudioTrack() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_playFd(
         JNIEnv* env,

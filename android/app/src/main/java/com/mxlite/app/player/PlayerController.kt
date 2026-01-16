@@ -16,18 +16,17 @@ class PlayerController(
     private val masterClock = object : PlaybackClock {
         override val positionMs: Long
             get() {
-                return if (NativePlayer.isAudioClockHealthy()) {
-                    // Audio is master
+                return if (hasAudio) {
+                    // Native audio track exists: audio is master
                     NativePlayer.getClockUs() / 1000
                 } else {
-                    // Standalone clock takes over
+                    // No audio track: standalone clock is master
                     standaloneClock.positionUs() / 1000
                 }
             }
     }
 
     private val video = MediaCodecEngine(context, masterClock)
-    private val legacyAudio = AudioCodecEngine()
 
     private var hasAudio = false
     private var playing = false
@@ -42,8 +41,8 @@ class PlayerController(
 
     override val currentPositionMs: Long
         get() {
-            return if (NativePlayer.isAudioClockHealthy()) {
-                // Audio is master
+            return if (hasAudio) {
+                // Native audio track exists: audio is master
                 NativePlayer.getClockUs() / 1000
             } else {
                 // Standalone clock takes over
@@ -90,6 +89,9 @@ class PlayerController(
             standaloneClock.start(0L)
 
             NativePlayer.playFd(pfd.fd, 0L, -1)
+
+            // Query native engine to see whether an audio track actually exists
+            hasAudio = NativePlayer.dbgHasAudioTrack()
 
             // If audio is already healthy immediately, sync the standalone clock so handoff is seamless
             if (NativePlayer.isAudioClockHealthy()) {
@@ -161,12 +163,8 @@ class PlayerController(
             NativePlayer.nativeSeek(positionMs * 1000)
         }
 
-        // 🔁 Recreate video cleanly
-        video.release()
-        currentUri?.let { uri ->
-            // Delegate to MediaCodecEngine which will open its PFD
-            video.play(uri)
-        }
+        // 🔁 Recreate video cleanly (do NOT restart audio here)
+        video.recreateVideo()
 
         seeking = false
 
@@ -188,7 +186,6 @@ class PlayerController(
         video.setRenderEnabled(false)
 
         if (hasAudio) NativePlayer.release()
-        legacyAudio.release()
         video.release()
 
         // Clear current URI when fully releasing

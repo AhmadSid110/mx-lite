@@ -58,6 +58,9 @@ AudioEngine::~AudioEngine() {
 
 bool AudioEngine::open(const char* path) {
     gAudioDebug.openStage.store(1);
+
+    // Reset audio-track flag for this new file (MANDATORY)
+    hasAudioTrack_ = false;
     
     // ✅ Reset Clocks on new file
     seekOffsetUs_.store(0);
@@ -92,6 +95,10 @@ bool AudioEngine::open(const char* path) {
     if (audioTrack < 0) {
         return false;
     }
+
+    // Mark that we found an audio track
+    hasAudioTrack_ = true;
+
     gAudioDebug.openStage.store(3);
 
     AMediaExtractor_selectTrack(extractor_, audioTrack);
@@ -135,6 +142,9 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
     if (dupFd < 0) {
         return false;
     }
+
+    // Reset audio-track flag for this new file (MANDATORY)
+    hasAudioTrack_ = false;
 
     // Rewind fix: ensure duplicated fd points to file start. Some Java callers
     // may have advanced the shared offset which breaks native extraction.
@@ -204,6 +214,9 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
         return false;
     }
 
+    // Mark that we found an audio track
+    hasAudioTrack_ = true;
+
     gAudioDebug.openStage.store(3);
 
     AMediaExtractor_selectTrack(extractor_, audioTrack);
@@ -247,13 +260,19 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 void AudioEngine::start() {
     if (!stream_) return;
 
+    // Enable output and decoding
+    audioOutputEnabled_.store(true);
+    decodeEnabled_.store(true);
+    isPlaying_.store(true);
+
     // Fire & Forget Start
     AAudioStream_requestStart(stream_);
+    // Capture frame position after starting to ensure baseline aligns with
+    // the moment the hardware begins producing frames.
+    startFramePosition_ = AAudioStream_getFramesRead(stream_);
     gAudioDebug.aaudioStarted.store(true);
     // Mark audio as healthy when we start the hardware stream
     gAudioHealthy.store(true);
-
-    isPlaying_.store(true);
 
     if (decodeThread_.joinable()) {
         decodeThread_.join();
@@ -262,15 +281,18 @@ void AudioEngine::start() {
 }
 
 void AudioEngine::pause() {
+    // ⛔ HARD STOP AUDIO OUTPUT FIRST
+    audioOutputEnabled_.store(false);
+    decodeEnabled_.store(false);
     isPlaying_.store(false);
 
     if (decodeThread_.joinable())
         decodeThread_.join();
 
-    if (stream_) {
-        AAudioStream_requestPause(stream_); // Pause instead of Stop for quicker resume
-        gAudioHealthy.store(false);
-    }
+    if (stream_)
+        AAudioStream_requestStop(stream_);
+
+    gAudioHealthy.store(false);
 }
 
 void AudioEngine::stop() {
@@ -286,35 +308,46 @@ void AudioEngine::stop() {
 }
 
 void AudioEngine::seekUs(int64_t us) {
-    // 1. Stop audio briefly
+    // 1. STOP EVERYTHING
+    audioOutputEnabled_.store(false);
+    decodeEnabled_.store(false);
+    isPlaying_.store(false);
+
+    if (decodeThread_.joinable())
+        decodeThread_.join();
+
     if (stream_)
         AAudioStream_requestStop(stream_);
 
-    // 2. ✅ UPDATE CLOCK BASELINE
+    // 2. RESET CLOCK BASELINE
     seekOffsetUs_.store(us);
-    if (stream_) {
-        // We capture the CURRENT hardware frame count.
-        // All future time will be calculated relative to this frame.
-        startFramePosition_ = AAudioStream_getFramesRead(stream_);
-    } else {
-        startFramePosition_ = 0;
-    }
 
-    // 3. Clear ring buffer (prevent old audio bleed)
+    // 3. CLEAR BUFFERS
     flushRingBuffer();
     memset(ringBuffer_, 0, sizeof(ringBuffer_));
 
-    // 4. Move extractor
+    // 4. RESET MEDIA PIPELINE
     if (extractor_)
         AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
 
-    // 5. Flush decoder
     if (codec_)
         AMediaCodec_flush(codec_);
 
-    // 6. Restart audio
-    if (stream_)
+    // 5. RESTART AUDIO
+    audioOutputEnabled_.store(true);
+    decodeEnabled_.store(true);
+    isPlaying_.store(true);
+
+    if (stream_) {
         AAudioStream_requestStart(stream_);
+        startFramePosition_ = AAudioStream_getFramesRead(stream_);
+    }
+
+    // 6. RESTART DECODE
+    if (decodeThread_.joinable()) {
+        decodeThread_.join();
+    }
+    decodeThread_ = std::thread(&AudioEngine::decodeLoop, this);
 }
 
 /* ===================== AAudio ===================== */
@@ -423,7 +456,7 @@ void AudioEngine::writePcmBlocking(const int16_t* in, int frames) {
 /* ===================== MediaCodec Decode ===================== */
 
 void AudioEngine::decodeLoop() {
-    while (isPlaying_.load()) {
+    while (isPlaying_.load() && decodeEnabled_.load()) {
 
         // =============================
         // INPUT STAGE (MANDATORY)
@@ -593,12 +626,12 @@ aaudio_data_callback_result_t AudioEngine::dataCallback(
         // Mark that the callback fired
         gAudioDebug.callbackCalled.store(true);
 
-        // LOUD TEST: force audible/silent output to prove callback is running
-        // Note: this is a temporary diagnostic — it writes silence into the
-        // audio buffer so you can confirm the callback path is executing.
-        memset(audioData, 0, engine->framesToSamples(numFrames) * sizeof(int16_t));
+        // 🔒 HARD GATE: if audio output is disabled, write silence and return
+        if (!engine->audioOutputEnabled_.load()) {
+            memset(out, 0, engine->framesToSamples(numFrames) * sizeof(int16_t));
+            return AAUDIO_CALLBACK_RESULT_CONTINUE;
+        }
 
-        // Normal behavior: render from ring buffer (overwrites the buffer we just cleared)
         int32_t samplesNeeded = engine->framesToSamples(numFrames);
         engine->renderAudio(out, samplesNeeded);
 
