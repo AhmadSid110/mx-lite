@@ -1,7 +1,9 @@
 package com.mxlite.app.player
 
 import android.content.Context
+import android.net.Uri
 import android.view.Surface
+import android.os.ParcelFileDescriptor
 import java.io.File
 
 class PlayerController(
@@ -9,22 +11,45 @@ class PlayerController(
 ) : PlayerEngine {
 
     private val nativeClock = NativeClock()
-    private val video = MediaCodecEngine(nativeClock)
+    private val standaloneClock = StandaloneMediaClock()
+
+    private val masterClock = object : PlaybackClock {
+        override val positionMs: Long
+            get() {
+                return if (NativePlayer.isAudioClockHealthy()) {
+                    // Audio is master
+                    NativePlayer.getClockUs() / 1000
+                } else {
+                    // Standalone clock takes over
+                    standaloneClock.positionUs() / 1000
+                }
+            }
+    }
+
+    private val video = MediaCodecEngine(context, masterClock)
     private val legacyAudio = AudioCodecEngine()
 
     private var hasAudio = false
     private var playing = false
-    private var currentFile: File? = null
     private var seeking = false
+
+    // Track the currently playing content URI (if any)
+    override var currentUri: Uri? = null
+        private set
 
     override val durationMs: Long
         get() = video.durationMs
 
     override val currentPositionMs: Long
-        get() = if (hasAudio)
-            NativePlayer.getClockUs() / 1000
-        else
-            video.currentPositionMs
+        get() {
+            return if (NativePlayer.isAudioClockHealthy()) {
+                // Audio is master
+                NativePlayer.getClockUs() / 1000
+            } else {
+                // Standalone clock takes over
+                standaloneClock.positionUs() / 1000
+            }
+        }
 
     override val isPlaying: Boolean
         get() = playing
@@ -33,23 +58,63 @@ class PlayerController(
         video.attachSurface(surface)
     }
 
-    override fun play(file: File) {
-        release()
-        currentFile = file
+    // ✅ NEW: Play directly from a content URI (opens PFD for audio detection / dup, and delegates video ownership to MediaCodecEngine)
+    override fun play(uri: Uri) {
+        android.widget.Toast
+            .makeText(
+                context,
+                "PlayerController.play(uri) ENTERED",
+                android.widget.Toast.LENGTH_LONG
+            )
+            .show()
 
-        hasAudio = legacyAudio.hasAudioTrack(file)
+        // TEMPORARILY disable ALL guards
+        // if (currentUri == uri && playing) return
 
-        // 🔑 ALWAYS allow render on fresh play
-        video.setRenderEnabled(true)
+        currentUri = uri
+        playing = true
 
-        if (hasAudio) {
-            NativePlayer.play(context, file.absolutePath)
-        }
+        try {
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+                ?: throw IllegalStateException("openFileDescriptor returned null")
 
-        // 🔑 IMPORTANT
-        if (video.hasSurface()) {
-            video.play(file)
-            playing = true
+            android.widget.Toast
+                .makeText(
+                    context,
+                    "PFD opened fd=${pfd.fd}",
+                    android.widget.Toast.LENGTH_LONG
+                )
+                .show()
+
+            // Ensure UI clock advances even if audio hasn't started or will fail
+            standaloneClock.start(0L)
+
+            NativePlayer.playFd(pfd.fd, 0L, -1)
+
+            // If audio is already healthy immediately, sync the standalone clock so handoff is seamless
+            if (NativePlayer.isAudioClockHealthy()) {
+                val audioUs = NativePlayer.getClockUs()
+                standaloneClock.start(audioUs)
+            }
+
+            android.widget.Toast
+                .makeText(
+                    context,
+                    "NativePlayer.playFd called",
+                    android.widget.Toast.LENGTH_LONG
+                )
+                .show()
+
+            video.play(uri)
+
+        } catch (e: Throwable) {
+            android.widget.Toast
+                .makeText(
+                    context,
+                    "ENGINE ERROR: ${e.javaClass.simpleName}: ${e.message}",
+                    android.widget.Toast.LENGTH_LONG
+                )
+                .show()
         }
     }
 
@@ -74,11 +139,15 @@ class PlayerController(
 
         if (hasAudio) {
             NativePlayer.nativeResume()
+            if (NativePlayer.isAudioClockHealthy()) {
+                val audioUs = NativePlayer.getClockUs()
+                standaloneClock.start(audioUs)
+            }
         }
     }
 
     override fun seekTo(positionMs: Long) {
-        if (currentFile == null) return
+        if (currentUri == null) return
 
         val wasPlaying = playing
         seeking = true
@@ -94,7 +163,10 @@ class PlayerController(
 
         // 🔁 Recreate video cleanly
         video.release()
-        video.play(currentFile!!)
+        currentUri?.let { uri ->
+            // Delegate to MediaCodecEngine which will open its PFD
+            video.play(uri)
+        }
 
         seeking = false
 
@@ -104,6 +176,10 @@ class PlayerController(
 
             if (hasAudio) {
                 NativePlayer.nativeResume()
+                if (NativePlayer.isAudioClockHealthy()) {
+                    val audioUs = NativePlayer.getClockUs()
+                    standaloneClock.start(audioUs)
+                }
             }
         }
     }
@@ -115,9 +191,28 @@ class PlayerController(
         legacyAudio.release()
         video.release()
 
+        // Clear current URI when fully releasing
+        currentUri = null
+
         hasAudio = false
         playing = false
         seeking = false
-        currentFile = null
+    }
+
+    // Detach surface (called from UI when the Surface disappears)
+    override fun detachSurface() {
+        // stop video rendering without stopping audio
+        video.detachSurface()
+    }
+
+    // Recreate video safely using the last known URI
+    override fun recreateVideo() {
+        val uri = currentUri ?: return
+
+        // Avoid restarting if video engine is already running
+        if (video.isPlaying) return
+
+        // Restart only the video (audio keeps playing)
+        video.recreateVideo()
     }
 }

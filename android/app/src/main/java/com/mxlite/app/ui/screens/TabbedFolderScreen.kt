@@ -153,7 +153,7 @@ fun TabbedFolderScreen(
                     videoTitle = video.name,
                     duration = video.durationFormatted,
                     fileSize = video.sizeFormatted,
-                    thumbnail = null, // Placeholder for Phase 6
+                    thumbnail = video.uri,
                     onClick = { onVideoClick(video) }
                 )
             }

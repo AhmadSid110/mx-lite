@@ -47,7 +47,8 @@ import com.mxlite.app.subtitle.SubtitlePrefsStore
 import com.mxlite.app.subtitle.SubtitleTrack
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 private val SubtitleMimeTypes = arrayOf(
     "application/x-subrip",
@@ -67,23 +68,31 @@ private const val SubtitleShadowBlurRadius = 8f
 private const val PrefsSaveDebounceMs = 500L
 private const val MaxTrackDisplayNameLength = 15
 
+
+
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
-    file: File,
+    uri: android.net.Uri,
     engine: PlayerEngine,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    _internal: Boolean = true
 ) {
     BackHandler(enabled = true) {
         onBack()
     }
-    
+
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    
+
     val prefsStore = remember { SubtitlePrefsStore(context) }
     val audioTrackPrefsStore = remember { AudioTrackPrefsStore(context) }
-    val videoId = remember(file) { SubtitlePrefsStore.videoIdFromFile(file) }
+    val videoId = remember(uri) { SubtitlePrefsStore.videoIdFromUri(uri) }
+
+    val videoDisplayName = remember(uri) {
+        DocumentFile.fromSingleUri(context, uri)?.name ?: uri.lastPathSegment ?: "Video"
+    }
 
     var positionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
@@ -153,7 +162,7 @@ fun PlayerScreen(
         }
 
     // Load preferences and initialize subtitle controller
-    LaunchedEffect(file) {
+    LaunchedEffect(uri) {
         // Load saved preferences
         val savedPrefs = prefsStore.load(videoId)
         subtitlesEnabled = savedPrefs.enabled
@@ -163,76 +172,41 @@ fun PlayerScreen(
         subtitleBgOpacity = savedPrefs.bgOpacity
         subtitleBottomMargin = savedPrefs.bottomMarginDp
         selectedTrackId = savedPrefs.selectedTrackId
-        
-        // Load available audio tracks
-        availableAudioTracks = AudioTrackExtractor.extractAudioTracks(file)
-        selectedAudioTrackIndex = audioTrackPrefsStore.loadTrackIndex(videoId)
-        
-        // Extract codec information (only once)
-        codecInfoList = CodecInfoController.getFileCodecInfo(file)
-        
-        // Filter for unsupported codecs from existing result
-        unsupportedCodecs = codecInfoList
-            .filter { !it.second.isSupported }
-            .map { it.first.mimeType }
-        
-        // Show warning if unsupported codecs detected
-        if (unsupportedCodecs.isNotEmpty()) {
-            showUnsupportedCodecWarning = true
+
+        // Use a ParcelFileDescriptor to query track metadata without creating temp files
+        try {
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return@LaunchedEffect
+
+            // IMPORTANT: We open a dedicated PFD here for metadata queries and
+            // close it immediately after. We MUST NOT close or affect the FD
+            // that MediaCodecEngine uses for playback (the engine opens its own PFD).
+
+            // Load available audio tracks from FD (do NOT close the fd inside)
+            availableAudioTracks = AudioTrackExtractor.extractAudioTracks(pfd.fileDescriptor)
+            selectedAudioTrackIndex = audioTrackPrefsStore.loadTrackIndex(videoId)
+
+            // Extract codec information (only once)
+            codecInfoList = CodecInfoController.getFileCodecInfo(pfd.fileDescriptor)
+
+            // Filter for unsupported codecs from existing result
+            unsupportedCodecs = codecInfoList
+                .filter { !it.second.isSupported }
+                .map { it.first.mimeType }
+
+            // Show warning if unsupported codecs detected
+            if (unsupportedCodecs.isNotEmpty()) {
+                showUnsupportedCodecWarning = true
+            }
+
+            // Close our local PFD - the engine owns its PFD separately
+            pfd.close()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        
-        // Initialize subtitle controller
+
+        // Initialize subtitle controller (no auto-loading of sidecar files for URIs)
         subtitleController = SubtitleController(context)
         subtitleLine = null
-        
-        // Auto-load subtitle from same folder
-        val parent = file.parentFile
-        if (parent != null) {
-            val baseName = file.nameWithoutExtension
-            
-            // Search for subtitle files with various naming patterns
-            // Priority: exact match > language suffix (en, eng, etc.)
-            val subtitlePatterns = listOf(
-                // Exact matches (highest priority)
-                "$baseName.srt",
-                "$baseName.ass",
-                "$baseName.ssa",
-                // Language variants
-                "$baseName.en.srt",
-                "$baseName.eng.srt",
-                "$baseName.english.srt",
-                "$baseName.en.ass",
-                "$baseName.eng.ass",
-                "$baseName.en.ssa",
-                "$baseName.eng.ssa"
-            )
-            
-            // Find all matching subtitle files
-            var firstTrackId: String? = null
-            for (pattern in subtitlePatterns) {
-                val subtitleFile = File(parent, pattern)
-                if (subtitleFile.exists()) {
-                    val track = SubtitleTrack.FileTrack(subtitleFile)
-                    subtitleController?.addTrack(track)
-                    
-                    // Remember first track found
-                    if (firstTrackId == null) {
-                        firstTrackId = track.id
-                    }
-                }
-            }
-            
-            // Restore saved track or auto-select first available
-            if (savedPrefs.selectedTrackId != null) {
-                subtitleController?.selectTrack(savedPrefs.selectedTrackId)
-                selectedTrackId = savedPrefs.selectedTrackId
-            } else if (firstTrackId != null) {
-                // No saved preference, use first available track
-                subtitleController?.selectTrack(firstTrackId)
-                selectedTrackId = firstTrackId
-            }
-        }
-        
         subtitleError = null
     }
 
@@ -286,7 +260,7 @@ fun PlayerScreen(
 
         if (controlsVisible) {
             TopAppBar(
-                title = { Text(file.name) },
+                title = { Text(videoDisplayName) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Text("←")
@@ -318,32 +292,44 @@ fun PlayerScreen(
                         )
                     },
                 factory = { ctx ->
-                    SurfaceView(ctx).apply {
-                        isFocusable = false
-                        isFocusableInTouchMode = false
-                        holder.addCallback(
-                            object : android.view.SurfaceHolder.Callback {
-                                override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                                    engine.attachSurface(holder.surface)
+                    android.view.TextureView(ctx).apply {
+                        surfaceTextureListener =
+                            object : android.view.TextureView.SurfaceTextureListener {
 
-                                    if (!playbackStarted) {
-                                        playbackStarted = true
-                                        engine.play(file)
-                                    }
+                                override fun onSurfaceTextureAvailable(
+                                    surfaceTexture: android.graphics.SurfaceTexture,
+                                    width: Int,
+                                    height: Int
+                                ) {
+                                    val surface = android.view.Surface(surfaceTexture)
+                                    engine.attachSurface(surface)
+
+                                    android.widget.Toast.makeText(
+                                        ctx,
+                                        "Texture surface available",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+
+                                    engine.play(uri)
                                 }
-                                override fun surfaceChanged(
-                                    holder: android.view.SurfaceHolder,
-                                    format: Int,
+
+                                override fun onSurfaceTextureSizeChanged(
+                                    surface: android.graphics.SurfaceTexture,
                                     width: Int,
                                     height: Int
                                 ) = Unit
 
-                                override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {
-                                    // IMPORTANT: stop video rendering
-                                    engine.pause()
+                                override fun onSurfaceTextureDestroyed(
+                                    surface: android.graphics.SurfaceTexture
+                                ): Boolean {
+                                    engine.detachSurface()
+                                    return true
                                 }
+
+                                override fun onSurfaceTextureUpdated(
+                                    surface: android.graphics.SurfaceTexture
+                                ) = Unit
                             }
-                        )
                     }
                 }
             )
@@ -381,6 +367,26 @@ fun PlayerScreen(
                     .align(Alignment.TopStart)
                     .padding(16.dp)
             )
+
+            // ENGINE STATE OVERLAY (TEMP) — shows playback state on-screen
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.01f))
+            ) {
+                Text(
+                    text = buildString {
+                        appendLine("ENGINE PLAYING: ${engine.isPlaying}")
+                        appendLine("DURATION: ${engine.durationMs}")
+                        appendLine("POSITION: ${engine.currentPositionMs}")
+                    },
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .padding(16.dp)
+                )
+            }
         }
 
         if (controlsVisible) {

@@ -4,9 +4,9 @@ object NativeAudioDebug {
     fun snapshot(): String {
         return """
 engineCreated=${NativePlayer.dbgEngineCreated()}
-aaudioOpened=${NativePlayer.dbgAAudioOpened()}
-aaudioStarted=${NativePlayer.dbgAAudioStarted()}
-aaudioError=${NativePlayer.dbgAAudioError()}
+audioOpened=${NativePlayer.dbgAAudioOpened()}
+audioStarted=${NativePlayer.dbgAAudioStarted()}
+audioError=${NativePlayer.dbgAAudioError()} (${NativePlayer.dbgAAudioErrorString()})
 callbackCalled=${NativePlayer.dbgCallbackCalled()}
 decoderProduced=${NativePlayer.dbgDecoderProduced()}
 nativePlayCalled=${NativePlayer.dbgNativePlayCalled()}

@@ -17,6 +17,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.decode.VideoFrameDecoder
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -181,10 +185,12 @@ fun CompactVideoRow(
     videoTitle: String,
     duration: String,
     fileSize: String,
-    thumbnail: ImageBitmap?,
+    thumbnail: Any?, // ✅ URI or String
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -192,7 +198,6 @@ fun CompactVideoRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Thumbnail (Left)
         Box(
             modifier = Modifier
                 .width(120.dp)
@@ -200,60 +205,48 @@ fun CompactVideoRow(
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black)
         ) {
-            if (thumbnail != null) {
-                Image(
-                    bitmap = thumbnail,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.PlayCircleOutline,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.3f),
-                    modifier = Modifier
-                        .size(24.dp)
-                        .align(Alignment.Center)
-                )
-            }
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(thumbnail) // String path, File, or Uri
+                    .decoderFactory(VideoFrameDecoder.Factory())
+                    .setParameter(
+                        VideoFrameDecoder.VIDEO_FRAME_MICROS_KEY,
+                        1_000_000L // 1 second
+                    )
+                    .allowHardware(false) // REQUIRED for video frames
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
 
-            // Mini Duration Badge
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(4.dp)
-                    .background(
-                        Color.Black.copy(alpha = 0.8f),
-                        RoundedCornerShape(2.dp)
-                    )
+                    .background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(2.dp))
                     .padding(horizontal = 4.dp, vertical = 1.dp)
             ) {
                 Text(
                     text = duration,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    fontSize = 10.sp
+                    fontSize = 10.sp,
+                    color = Color.White
                 )
             }
         }
 
         Spacer(modifier = Modifier.width(16.dp))
 
-        // Info (Right)
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = videoTitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = fileSize,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.labelSmall
             )
         }
     }

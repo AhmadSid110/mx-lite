@@ -1,16 +1,13 @@
 package com.mxlite.app.ui
 
 import androidx.compose.runtime.*
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import com.mxlite.app.player.PlayerController
 import com.mxlite.app.ui.player.PlayerScreen
 import com.mxlite.app.ui.screens.HomeScreen
 import com.mxlite.app.ui.screens.TabbedFolderScreen
 import com.mxlite.app.model.FolderInfo
-import com.mxlite.app.model.VideoFile
 import com.mxlite.app.browser.VideoStoreRepository
-import com.mxlite.app.storage.SafFileCopier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -19,23 +16,23 @@ import java.io.File
 fun AppRoot() {
     val context = LocalContext.current
 
-    // PlayerController now correctly receives Context
-    val engine = remember {
-        PlayerController(context)
-    }
+    // PlayerController correctly receives Context
+    val engine = remember { PlayerController(context) }
 
-    var playingFile by remember { mutableStateOf<File?>(null) }
+    // Navigation State
+    var playingUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var selectedFolder by remember { mutableStateOf<FolderInfo?>(null) }
     var folders by remember { mutableStateOf<List<FolderInfo>>(emptyList()) }
 
-    /* Load folders from MediaStore */
+    // Load folders
     LaunchedEffect(Unit) {
-        val items = VideoStoreRepository.load(context)
+        val items = withContext(Dispatchers.IO) {
+            VideoStoreRepository.load(context)
+        }
 
-        // Map VideoItem -> VideoFile
         val videos = items.map { item ->
-            VideoFile(
-                id = item.contentUri.toString(),
+            com.mxlite.app.model.VideoFile(
+                id = item.id.toString(),
                 path = item.folder,
                 name = item.name,
                 size = item.size,
@@ -58,37 +55,29 @@ fun AppRoot() {
             .sortedBy { it.name }
     }
 
-    if (playingFile != null) {
+    // Navigation Logic
+    if (playingUri != null) {
         PlayerScreen(
-            file = playingFile!!,
+            uri = playingUri!!,
             engine = engine,
             onBack = {
-                engine.release()   // 🔑 important cleanup
-                playingFile = null
+                // We just clear state here. 
+                // Engine cleanup happens inside PlayerScreen's DisposableEffect
+                playingUri = null
             }
         )
+    
     } else if (selectedFolder != null) {
-        var videoToPlay by remember { mutableStateOf<com.mxlite.app.model.VideoFile?>(null) }
-
         TabbedFolderScreen(
             folder = selectedFolder!!,
             onVideoClick = { video ->
-                videoToPlay = video
+                // ✅ CORRECT: Just set the state.
+                // Do NOT call engine.play() here.
+                // PlayerScreen will handle it when ready.
+                playingUri = video.thumbnailUri 
             },
             onBack = { selectedFolder = null }
         )
-
-        // ✅ FIX: Use LaunchedEffect to run suspend work when a video is requested
-        LaunchedEffect(videoToPlay) {
-            val v = videoToPlay
-            if (v != null) {
-                val cachedFile = withContext(Dispatchers.IO) {
-                    SafFileCopier.copyToCache(context, android.net.Uri.parse(v.id))
-                }
-                playingFile = cachedFile
-                videoToPlay = null
-            }
-        }
     } else {
         HomeScreen(
             folders = folders,

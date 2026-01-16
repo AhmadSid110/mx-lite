@@ -63,6 +63,55 @@ object CodecInfoController {
         
         return tracks
     }
+
+    /**
+     * Overload: accept a FileDescriptor (for URI-based usage)
+     */
+    /**
+     * Overload: accept a FileDescriptor (for URI-based usage)
+     * NOTE: This does NOT close or take ownership of the provided FileDescriptor.
+     * The caller is responsible for managing the PFD lifecycle.
+     */
+    fun extractTrackInfo(fd: java.io.FileDescriptor): List<TrackCodecInfo> {
+        val tracks = mutableListOf<TrackCodecInfo>()
+        val extractor = MediaExtractor()
+
+        try {
+            // IMPORTANT: Do not close fd here; MediaExtractor will not own it.
+            extractor.setDataSource(fd)
+
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+
+                val trackType = when {
+                    mime.startsWith("video/") -> TrackCodecInfo.TrackType.VIDEO
+                    mime.startsWith("audio/") -> TrackCodecInfo.TrackType.AUDIO
+                    else -> TrackCodecInfo.TrackType.UNKNOWN
+                }
+
+                if (trackType == TrackCodecInfo.TrackType.UNKNOWN) continue
+
+                val codecName = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                    format.containsKey(MediaFormat.KEY_CODECS_STRING)) {
+                    format.getString(MediaFormat.KEY_CODECS_STRING)
+                } else null
+
+                tracks.add(
+                    TrackCodecInfo(
+                        trackIndex = i,
+                        trackType = trackType,
+                        mimeType = mime,
+                        codecName = codecName
+                    )
+                )
+            }
+        } finally {
+            extractor.release()
+        }
+
+        return tracks
+    }
     
     /**
      * Detect decoder capability for a specific MIME type.
@@ -120,6 +169,13 @@ object CodecInfoController {
             track to detectCodecCapability(track.mimeType)
         }
     }
+
+    fun getFileCodecInfo(fd: java.io.FileDescriptor): List<Pair<TrackCodecInfo, CodecCapability>> {
+        val tracks = extractTrackInfo(fd)
+        return tracks.map { track ->
+            track to detectCodecCapability(track.mimeType)
+        }
+    }
     
     /**
      * Check if there are any unsupported codecs in the file.
@@ -127,6 +183,13 @@ object CodecInfoController {
      */
     fun getUnsupportedCodecs(file: File): List<String> {
         val codecInfo = getFileCodecInfo(file)
+        return codecInfo
+            .filter { !it.second.isSupported }
+            .map { it.first.mimeType }
+    }
+
+    fun getUnsupportedCodecs(fd: java.io.FileDescriptor): List<String> {
+        val codecInfo = getFileCodecInfo(fd)
         return codecInfo
             .filter { !it.second.isSupported }
             .map { it.first.mimeType }

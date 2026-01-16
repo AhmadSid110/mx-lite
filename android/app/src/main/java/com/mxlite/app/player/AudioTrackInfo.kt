@@ -3,6 +3,7 @@ package com.mxlite.app.player
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import java.io.File
+import java.io.FileDescriptor
 
 /**
  * Audio track metadata extracted from media file.
@@ -74,6 +75,59 @@ object AudioTrackExtractor {
             extractor.release()
         }
         
+        return tracks
+    }
+
+    /**
+     * Overload: accept a FileDescriptor instead of a File. Useful for URIs.
+     */
+    /**
+     * Overload: accept a FileDescriptor instead of a File. Useful for URIs.
+     * NOTE: This method does NOT take ownership of the passed FileDescriptor and
+     * does NOT close it. Callers are responsible for opening/closing any
+     * ParcelFileDescriptor they use to obtain the FileDescriptor.
+     * The function performs synchronous metadata extraction only.
+     */
+    fun extractAudioTracks(fd: FileDescriptor): List<AudioTrackInfo> {
+        val tracks = mutableListOf<AudioTrackInfo>()
+        val extractor = MediaExtractor()
+
+        try {
+            // IMPORTANT: Do not close fd here; MediaExtractor will not own it.
+            extractor.setDataSource(fd)
+
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+
+                if (mime.startsWith("audio/")) {
+                    val language = if (format.containsKey(MediaFormat.KEY_LANGUAGE)) {
+                        format.getString(MediaFormat.KEY_LANGUAGE)
+                    } else null
+
+                    val channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                        format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                    } else 2
+
+                    val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                        format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    } else 44100
+
+                    tracks.add(
+                        AudioTrackInfo(
+                            trackIndex = i,
+                            language = language,
+                            mimeType = mime,
+                            channelCount = channelCount,
+                            sampleRate = sampleRate
+                        )
+                    )
+                }
+            }
+        } finally {
+            extractor.release()
+        }
+
         return tracks
     }
 }

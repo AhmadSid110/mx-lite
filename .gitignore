@@ -24,3 +24,11 @@ android/cmdline-tools/bin/sdkmanager.bat
 android/cmdline-tools.zip
 android/cmdline-tools
 jdk17
+android/replay_pid3508.log
+android/hs_err_pid3276.log
+android/hs_err_pid3200.log
+android/hs_err_pid1380.log
+android/hs_err_pid1480.log
+android/hs_err_pid3508.log
+android/replay_pid1380.log
+android/replay_pid3200.log

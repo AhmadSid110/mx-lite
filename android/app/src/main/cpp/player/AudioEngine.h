@@ -75,7 +75,7 @@ private:
     
     int32_t framesToSamples(int32_t frames) const;
 
-    static aaudio_data_callback_result_t audioCallback(
+    static aaudio_data_callback_result_t dataCallback(
             AAudioStream* stream,
             void* userData,
             void* audioData,

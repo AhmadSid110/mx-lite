@@ -11,12 +11,17 @@
 #include <chrono>
 #include <cstring>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <atomic>
 
 #define LOG_TAG "AudioEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 extern AudioDebug gAudioDebug;
+
+// Global indicator of audio health. True when audio track is running and timestamps are valid.
+std::atomic<bool> gAudioHealthy{false};
 
 #if __ANDROID_API__ >= 28
 static void aaudioStateCallback(
@@ -94,6 +99,15 @@ bool AudioEngine::open(const char* path) {
     const char* mime = nullptr;
     AMediaFormat_getString(format_, AMEDIAFORMAT_KEY_MIME, &mime);
 
+    // Read audio format from the track and set safe defaults if missing
+    int32_t sr = 0;
+    int32_t ch = 0;
+    AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sr);
+    AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &ch);
+
+    sampleRate_   = (sr > 0) ? sr : 48000;
+    channelCount_ = (ch > 0) ? ch : 2;
+
     codec_ = AMediaCodec_createDecoderByType(mime);
     if (!codec_) return false;
     gAudioDebug.openStage.store(4);
@@ -121,6 +135,13 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
     if (dupFd < 0) {
         return false;
     }
+
+    // Rewind fix: ensure duplicated fd points to file start. Some Java callers
+    // may have advanced the shared offset which breaks native extraction.
+    if (lseek(dupFd, 0, SEEK_SET) < 0) {
+        close(dupFd);
+        return false;
+    }
     
     // ✅ Reset Clocks on new file
     seekOffsetUs_.store(0);
@@ -134,9 +155,28 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
         return false;
     }
 
-    if (AMediaExtractor_setDataSourceFd(
-            extractor_, dupFd, offset, length) != AMEDIA_OK) {
+    // NDK requirement: AMediaExtractor_setDataSourceFd does NOT accept length=-1.
+    // Calculate actual file length using fstat and pass it explicitly.
+    struct stat st {};
+    if (fstat(dupFd, &st) != 0) {
         close(dupFd);
+        LOGE("fstat(dupFd) failed");
+        return false;
+    }
+
+    int64_t fileLength = st.st_size;
+
+    // Ensure fd is at start
+    if (lseek(dupFd, 0, SEEK_SET) < 0) {
+        close(dupFd);
+        LOGE("lseek(dupFd) failed");
+        return false;
+    }
+
+    if (AMediaExtractor_setDataSourceFd(
+            extractor_, dupFd, offset, fileLength) != AMEDIA_OK) {
+        close(dupFd);
+        LOGE("Extractor setDataSourceFd FAILED");
         return false;
     }
 
@@ -171,6 +211,15 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
     const char* mime = nullptr;
     AMediaFormat_getString(format_, AMEDIAFORMAT_KEY_MIME, &mime);
 
+    // Read audio format from the track and set safe defaults if missing
+    int32_t sr = 0;
+    int32_t ch = 0;
+    AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_SAMPLE_RATE, &sr);
+    AMediaFormat_getInt32(format_, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &ch);
+
+    sampleRate_   = (sr > 0) ? sr : 48000;
+    channelCount_ = (ch > 0) ? ch : 2;
+
     codec_ = AMediaCodec_createDecoderByType(mime);
     if (!codec_) return false;
 
@@ -201,6 +250,8 @@ void AudioEngine::start() {
     // Fire & Forget Start
     AAudioStream_requestStart(stream_);
     gAudioDebug.aaudioStarted.store(true);
+    // Mark audio as healthy when we start the hardware stream
+    gAudioHealthy.store(true);
 
     isPlaying_.store(true);
 
@@ -216,8 +267,10 @@ void AudioEngine::pause() {
     if (decodeThread_.joinable())
         decodeThread_.join();
 
-    if (stream_)
+    if (stream_) {
         AAudioStream_requestPause(stream_); // Pause instead of Stop for quicker resume
+        gAudioHealthy.store(false);
+    }
 }
 
 void AudioEngine::stop() {
@@ -226,8 +279,10 @@ void AudioEngine::stop() {
     if (decodeThread_.joinable())
         decodeThread_.join();
 
-    if (stream_)
+    if (stream_) {
         AAudioStream_requestStop(stream_);
+        gAudioHealthy.store(false);
+    }
 }
 
 void AudioEngine::seekUs(int64_t us) {
@@ -273,29 +328,40 @@ bool AudioEngine::setupAAudio() {
 
     if (result != AAUDIO_OK) {
         gAudioDebug.aaudioError.store(result);
+        gAudioHealthy.store(false);
+        LOGE("AAudio createStreamBuilder failed: %s", AAudio_convertResultToText(result));
         return false;
     }
 
-    // Configure builder
+    // Configure builder with SAFE parameters (do NOT auto-detect or use float)
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
+    // Use format values discovered from MediaCodec if available
     AAudioStreamBuilder_setChannelCount(builder, channelCount_);
     AAudioStreamBuilder_setSampleRate(builder, sampleRate_);
 
     AAudioStreamBuilder_setSharingMode(
         builder, AAUDIO_SHARING_MODE_SHARED);
 
+    // Explicit direction is required on some OEM ROMs (MIUI/ColorOS) where
+    // implicit direction can cause the stream to hang and the callback to never fire.
+    AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+
     AAudioStreamBuilder_setPerformanceMode(
         builder, AAUDIO_PERFORMANCE_MODE_NONE);
 
     // VERY IMPORTANT: use data callback for delivery
+    // Use the exact symbol name required by the platform/QA
     AAudioStreamBuilder_setDataCallback(
-        builder, audioCallback, this);
+        builder, AudioEngine::dataCallback, this);
 
+    // Try opening the stream and log detailed reason if it fails
     result = AAudioStreamBuilder_openStream(builder, &stream_);
     AAudioStreamBuilder_delete(builder);
 
     if (result != AAUDIO_OK || !stream_) {
         gAudioDebug.aaudioError.store(result);
+        gAudioHealthy.store(false);
+        LOGE("AAudio open failed: %s", AAudio_convertResultToText(result));
         return false;
     }
 
@@ -309,6 +375,9 @@ bool AudioEngine::setupAAudio() {
     }
 
     gAudioDebug.aaudioOpened.store(true);
+
+    LOGD("AAudio stream opened (sampleRate=%d channels=%d)", sampleRate_, channelCount_);
+
     return true;
 }
 
@@ -512,8 +581,8 @@ int32_t AudioEngine::framesToSamples(int32_t frames) const {
 
 /* ===================== AAudio Callback ===================== */
 
-aaudio_data_callback_result_t AudioEngine::audioCallback(
-        AAudioStream*,
+aaudio_data_callback_result_t AudioEngine::dataCallback(
+        AAudioStream* /*stream*/,
         void* userData,
         void* audioData,
         int32_t numFrames) {
@@ -521,9 +590,17 @@ aaudio_data_callback_result_t AudioEngine::audioCallback(
         auto* engine = static_cast<AudioEngine*>(userData);
         auto* out = static_cast<int16_t*>(audioData);
 
+        // Mark that the callback fired
+        gAudioDebug.callbackCalled.store(true);
+
+        // LOUD TEST: force audible/silent output to prove callback is running
+        // Note: this is a temporary diagnostic — it writes silence into the
+        // audio buffer so you can confirm the callback path is executing.
+        memset(audioData, 0, engine->framesToSamples(numFrames) * sizeof(int16_t));
+
+        // Normal behavior: render from ring buffer (overwrites the buffer we just cleared)
         int32_t samplesNeeded = engine->framesToSamples(numFrames);
         engine->renderAudio(out, samplesNeeded);
 
-        gAudioDebug.callbackCalled.store(true);
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }

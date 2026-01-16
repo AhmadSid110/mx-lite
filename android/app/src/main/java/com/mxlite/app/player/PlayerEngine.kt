@@ -1,13 +1,23 @@
 package com.mxlite.app.player
 
 import android.view.Surface
-import java.io.File
+import android.net.Uri
 
 interface PlayerEngine {
 
     fun attachSurface(surface: Surface)
 
-    fun play(file: File)
+    // New URI-based play API
+    fun play(uri: Uri)
+
+    // Current playing URI (nullable)
+    val currentUri: Uri?
+
+    // Recreate only the video pipeline when surface is recreated
+    fun recreateVideo()
+
+    // Detach the surface and free video resources
+    fun detachSurface()
 
     fun pause()
 

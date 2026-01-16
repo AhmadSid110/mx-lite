@@ -1,8 +1,12 @@
 #include <jni.h>
+#include <android/log.h>
+#define LOGE(tag, fmt, ...) __android_log_print(ANDROID_LOG_ERROR, tag, fmt, ##__VA_ARGS__)
 
 #include "player/AudioEngine.h"
 #include "player/Clock.h"
 #include "player/AudioDebug.h"
+#include <aaudio/AAudio.h>
+#include <atomic>
 
 /*
  * Global singletons
@@ -14,6 +18,7 @@ static AudioEngine* gAudio = nullptr;
  * Audio debug state (defined in AudioDebug.cpp)
  */
 extern AudioDebug gAudioDebug;
+extern std::atomic<bool> gAudioHealthy;
 
 /* ───────────────────────────── */
 /* Playback control JNI */
@@ -164,6 +169,13 @@ Java_com_mxlite_app_player_NativePlayer_dbgAAudioStarted(
 
 extern "C"
 JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_isAudioClockHealthy(
+        JNIEnv*, jobject) {
+    return gAudioHealthy.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
 Java_com_mxlite_app_player_NativePlayer_dbgCallbackCalled(
         JNIEnv*,
         jobject) {
@@ -206,8 +218,43 @@ Java_com_mxlite_app_player_NativePlayer_dbgAAudioError(
 }
 
 extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgAAudioErrorString(
+        JNIEnv* env, jobject) {
+    int code = gAudioDebug.aaudioError.load();
+    const char* txt = AAudio_convertResultToText(static_cast<aaudio_result_t>(code));
+    if (!txt) txt = "UNKNOWN";
+    return env->NewStringUTF(txt);
+}
+
+extern "C"
 JNIEXPORT jint JNICALL
 Java_com_mxlite_app_player_NativePlayer_dbgOpenStage(
         JNIEnv*, jobject) {
     return gAudioDebug.openStage.load();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_NativePlayer_playFd(
+        JNIEnv* env,
+        jobject /* thiz */,
+        jint fd,
+        jlong offset,
+        jlong length) {
+
+    if (!gAudio) {
+        LOGE("MX-AUDIO", "AudioEngine is NULL, creating new AudioEngine");
+        gAudio = new AudioEngine(&gClock);
+    }
+
+    bool ok = gAudio->openFd(fd, offset, length);
+    if (!ok) {
+        LOGE("MX-AUDIO", "openFd FAILED");
+        return;
+    }
+
+    LOGE("MX-AUDIO", "openFd OK, starting audio");
+    gAudio->start();
+    LOGE("MX-AUDIO", "AudioEngine STARTED");
 }

@@ -14,11 +14,12 @@ class SafPlayerAdapter(
     private val engine: PlayerEngine
 ) {
 
+    // Use FD-based play path to avoid copying
     fun play(uri: Uri) {
-        val temp = copyToTempFile(uri)
-        engine.play(temp)
+        engine.play(uri)
     }
 
+    // Copy-to-temp logic retained for other use cases if needed
     private fun copyToTempFile(uri: Uri): File {
         val input = context.contentResolver.openInputStream(uri)
             ?: error("Cannot open SAF stream")

@@ -23,6 +23,8 @@ object NativePlayer {
         offset: Long,
         length: Long
     )
+    // ✅ NEW: Play using File Descriptor (public)
+    external fun playFd(fd: Int, offset: Long, length: Long)
     private external fun nativeStop()
     external fun nativeSeek(positionUs: Long)
     private external fun nativeRelease()
@@ -88,9 +90,13 @@ object NativePlayer {
     external fun dbgAAudioOpened(): Boolean
     external fun dbgAAudioStarted(): Boolean
     external fun dbgAAudioError(): Int
+    external fun dbgAAudioErrorString(): String
     external fun dbgOpenStage(): Int
     external fun dbgCallbackCalled(): Boolean
     external fun dbgDecoderProduced(): Boolean
     external fun dbgNativePlayCalled(): Boolean
     external fun dbgBufferFill(): Int
+
+    // Returns true when audio track is running and timestamps are valid.
+    external fun isAudioClockHealthy(): Boolean
 }

@@ -1,15 +1,22 @@
 package com.mxlite.app.player
 
+import android.content.Context
+import android.net.Uri
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.util.Log
 import android.view.Surface
-import java.io.File
+import android.os.ParcelFileDescriptor
 
 class MediaCodecEngine(
-    private val clock: NativeClock
+    private val context: Context,
+    private val clock: PlaybackClock
 ) : PlayerEngine {
+
+    // 🔒 Video engine does NOT own URI state
+    override val currentUri: android.net.Uri?
+        get() = null
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
@@ -64,8 +71,9 @@ class MediaCodecEngine(
             return
         }
 
-        val audioUs = NativePlayer.getClockUs()
-        if (audioUs <= 0) {
+        // Use the master clock (provided by PlayerController) so video never blocks on audio
+        val masterUs = clock.positionMs * 1000
+        if (masterUs <= 0) {
             // OPTIONAL: You can choose to render the first frame blindly here 
             // if you want to avoid a black screen on start, but strictly 
             // following the clock is safer for sync.
@@ -73,7 +81,7 @@ class MediaCodecEngine(
             return
         }
 
-        val diffUs = ptsUs - audioUs
+        val diffUs = ptsUs - masterUs
 
         when {
             diffUs > 15_000 -> {
@@ -140,53 +148,107 @@ class MediaCodecEngine(
         decodeThread!!.start()
     }
 
-    override fun play(file: File) {
+    private var currentPfd: ParcelFileDescriptor? = null
+
+    // ✅ NEW: accept FileDescriptor directly
+    // NOTE: This method does NOT take ownership of the passed FileDescriptor.
+    // The caller must ensure the FD remains valid for the duration of playback,
+    // or (preferably) open a dedicated ParcelFileDescriptor via play(uri) so the
+    // engine can manage its lifecycle.
+    fun play(fd: java.io.FileDescriptor) {
+        android.util.Log.e("MX-VIDEO", "MediaCodecEngine.play(fd): hasSurface=${hasSurface()}")
         if (!hasSurface()) {
             // Do NOT start codec without a surface
+            android.util.Log.e("MX-VIDEO", "No surface - aborting video start")
             return
         }
 
         release()
 
-        extractor = MediaExtractor().apply {
-            setDataSource(file.absolutePath)
-        }
+        try {
+            val pExtractor = MediaExtractor()
+            try {
+                pExtractor.setDataSource(fd)
+                android.util.Log.e("MX-VIDEO", "MediaExtractor setDataSource OK")
+            } catch (e: Exception) {
+                android.util.Log.e("MX-VIDEO", "Extractor FAILED", e)
+                return
+            }
+            extractor = pExtractor
 
-        val trackIndex = (0 until extractor!!.trackCount).firstOrNull { i ->
-            extractor!!
-                .getTrackFormat(i)
-                .getString(MediaFormat.KEY_MIME)
-                ?.startsWith("video/") == true
-        } ?: return
+            var trackIndex: Int? = null
+            for (i in 0 until extractor!!.trackCount) {
+                val format = extractor!!.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME)
+                android.util.Log.e("MX-VIDEO", "Track $i mime=$mime")
+                if (mime?.startsWith("video/") == true) {
+                    trackIndex = i
+                    break
+                }
+            }
 
-        extractor!!.selectTrack(trackIndex)
-        val format = extractor!!.getTrackFormat(trackIndex)
+            if (trackIndex == null) {
+                android.util.Log.e("MX-VIDEO", "NO VIDEO TRACK FOUND")
+                return
+            }
 
-        // ✅ CRITICAL SYNC FIX:
-        // When recreating video (e.g., after a seek), we MUST jump the extractor
-        // to match the current Audio Clock. Otherwise video starts from 00:00.
-        val currentAudioUs = NativePlayer.getClockUs()
-        if (currentAudioUs > 0) {
-            extractor!!.seekTo(currentAudioUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-        }
+            extractor!!.selectTrack(trackIndex)
+            val format = extractor!!.getTrackFormat(trackIndex)
+            android.util.Log.e("MX-VIDEO", "Creating codec for ${format.getString(MediaFormat.KEY_MIME)}")
 
-        durationMs =
-            if (format.containsKey(MediaFormat.KEY_DURATION))
+            // Sync Extractor logic (Keep this!)
+            val masterUs = clock.positionMs * 1000
+            if (masterUs > 0) {
+                extractor!!.seekTo(masterUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            } else {
+                extractor!!.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            }
+
+            durationMs = if (format.containsKey(MediaFormat.KEY_DURATION))
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
             else 0
 
-        codec = MediaCodec.createDecoderByType(
-            format.getString(MediaFormat.KEY_MIME)!!
-        ).apply {
-            configure(format, surface, null, 0)
-            start()
+            codec = MediaCodec.createDecoderByType(
+                format.getString(MediaFormat.KEY_MIME)!!
+            ).apply {
+                configure(format, surface, null, 0)
+                start()
+            }
+
+            inputEOS = false
+            lastRenderedPtsUs = Long.MIN_VALUE
+            renderEnabled = true
+
+            startDecodeLoop()
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            release()
         }
+    }
 
-        inputEOS = false
-        lastRenderedPtsUs = Long.MIN_VALUE
-        renderEnabled = true
+    // ✅ NEW: accept a Uri; open PFD via context and delegate to fd-based play
+    override fun play(uri: Uri) {
+        release()
 
-        startDecodeLoop()
+        try {
+            // Close any existing PFD we own before opening a new one
+            try { currentPfd?.close() } catch (_: Exception) {}
+            currentPfd = null
+
+            val pfd: ParcelFileDescriptor =
+                context.contentResolver.openFileDescriptor(uri, "r") ?: return
+
+            // Delegate to the real implementation
+            play(pfd.fileDescriptor)
+
+            // Store so we can close on release()
+            currentPfd = pfd
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            release()
+        }
     }
 
     override fun pause() {
@@ -199,6 +261,40 @@ class MediaCodecEngine(
 
     override fun seekTo(positionMs: Long) {
         // handled by PlayerController (recreate video)
+    }
+
+    // Detach surface without stopping audio or destroying the engine's PFD
+    override fun detachSurface() {
+        // Stop rendering and clear the surface reference
+        renderEnabled = false
+        surface = null
+
+        // Stop the decode loop but keep extractor and PFD so we can recreate quickly
+        videoRunning = false
+        try {
+            decodeThread?.join()
+        } catch (_: InterruptedException) {
+        }
+        decodeThread = null
+    }
+
+    // Recreate the video pipeline only - do NOT restart audio
+    override fun recreateVideo() {
+        if (videoRunning) return
+
+        // Release codec and extractor resources only
+        try { codec?.stop() } catch (_: Exception) {}
+        try { codec?.release() } catch (_: Exception) {}
+        codec = null
+        try { extractor?.release() } catch (_: Exception) {}
+        extractor = null
+
+        // If we own a PFD (opened via play(uri)), reuse it; otherwise nothing to do
+        val pfdLocal = currentPfd
+        if (pfdLocal != null && hasSurface()) {
+            // This will re-open extractor/codec and start the decode loop
+            play(pfdLocal.fileDescriptor)
+        }
     }
 
     override fun release() {
@@ -214,6 +310,13 @@ class MediaCodecEngine(
         codec?.stop()
         codec?.release()
         extractor?.release()
+
+        // Close any open ParcelFileDescriptor we created
+        try {
+            currentPfd?.close()
+        } catch (_: Exception) {
+        }
+        currentPfd = null
 
         codec = null
         extractor = null

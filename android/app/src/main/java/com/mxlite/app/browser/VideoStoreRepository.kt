@@ -8,12 +8,14 @@ import android.provider.MediaStore
 const val DEFAULT_FOLDER_NAME = "Videos"
 
 data class VideoItem(
+    val id: Long,
     val contentUri: Uri,
     val name: String,
     val folder: String,
     val size: Long,
     val duration: Long,
-    val dateAdded: Long
+    val dateAdded: Long,
+    val thumbnailUri: Uri
 )
 
 object VideoStoreRepository {
@@ -53,17 +55,26 @@ object VideoStoreRepository {
                     val duration = cursor.getLong(durationCol)
                     val dateAdded = cursor.getLong(dateCol)
 
+                    val videoUri = ContentUris.withAppendedId(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        id
+                    )
+
+                    val thumbnailUri = ContentUris.withAppendedId(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        id
+                    )
+
                     items.add(
                         VideoItem(
-                            contentUri = ContentUris.withAppendedId(
-                                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                                id
-                            ),
+                            id = id,
+                            contentUri = videoUri,
                             name = name,
                             folder = folder,
                             size = size,
                             duration = duration,
-                            dateAdded = dateAdded
+                            dateAdded = dateAdded,
+                            thumbnailUri = thumbnailUri
                         )
                     )
                 }
