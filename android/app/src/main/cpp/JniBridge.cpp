@@ -225,6 +225,13 @@ Java_com_mxlite_app_player_NativePlayer_dbgDecodeActive(JNIEnv *, jobject) {
                                                                   : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgGetClockLog(JNIEnv *env, jobject) {
+  char buf[256];
+  gVirtualClock.getLastLog(buf, sizeof(buf));
+  return env->NewStringUTF(buf);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_playFd(JNIEnv *env, jobject /* thiz */,
                                                jint fd, jlong offset,

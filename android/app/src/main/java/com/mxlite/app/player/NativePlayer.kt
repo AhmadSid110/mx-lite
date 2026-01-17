@@ -111,6 +111,7 @@ object NativePlayer {
     external fun dbgNativePlayCalled(): Boolean
     external fun dbgBufferFill(): Int
     external fun dbgDecodeActive(): Boolean
+    external fun dbgGetClockLog(): String
 
     // Returns true when audio track is running and timestamps are valid.
     external fun isAudioClockHealthy(): Boolean
