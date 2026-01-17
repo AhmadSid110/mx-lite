@@ -15,6 +15,7 @@ bufferFill=${NativePlayer.dbgBufferFill()}
 openStage = ${NativePlayer.dbgOpenStage()}
 DECODE ACTIVE = $decodeActive
 CLOCK LOG = ${NativePlayer.dbgGetClockLog()}
+CLOCK US = ${NativePlayer.virtualClockUs()}
         """.trimIndent()
     }
 }

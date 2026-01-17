@@ -135,9 +135,13 @@ Java_com_mxlite_app_player_NativePlayer_nativeGetDurationUs(JNIEnv *, jobject) {
 /* ───────────────────────────── */
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeGetClockUs(JNIEnv *, jobject) {
+Java_com_mxlite_app_player_NativePlayer_virtualClockUs(JNIEnv *, jobject) {
 
-  return gVirtualClock.positionUs();
+  int64_t pos = gVirtualClock.positionUs();
+  // Temporary logging as requested for 1-line proof
+  __android_log_print(ANDROID_LOG_ERROR, "JNI", "virtualClockUs = %lld",
+                      (long long)pos);
+  return pos;
 }
 
 /* ───────────────────────────── */

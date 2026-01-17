@@ -28,7 +28,7 @@ object NativePlayer {
     private external fun nativeStop()
     external fun nativeSeek(positionUs: Long)
     private external fun nativeRelease()
-    private external fun nativeGetClockUs(): Long
+    external fun virtualClockUs(): Long
     external fun nativePause()
     external fun nativeResume()
     external fun nativeGetDurationUs(): Long
@@ -46,8 +46,6 @@ object NativePlayer {
     fun resume() {
         nativeResume()
     }
-
-    /* ================= PUBLIC API ================= */
 
     fun play(path: String) {
         try {
@@ -93,9 +91,6 @@ object NativePlayer {
         initialized = false
     }
 
-    fun virtualClockUs(): Long {
-        return nativeGetClockUs()
-    }
 
     /* ================= DEBUG JNI ================= */
 
