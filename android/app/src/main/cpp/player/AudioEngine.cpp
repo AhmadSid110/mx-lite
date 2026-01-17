@@ -111,6 +111,14 @@ bool AudioEngine::open(const char *path) {
   sampleRate_ = (sr > 0) ? sr : 48000;
   channelCount_ = (ch > 0) ? ch : 2;
 
+  // Extract duration from format
+  int64_t durationUs = 0;
+  if (AMediaFormat_getInt64(format_, AMEDIAFORMAT_KEY_DURATION, &durationUs)) {
+    durationUs_ = durationUs;
+  } else {
+    durationUs_ = 0;
+  }
+
   codec_ = AMediaCodec_createDecoderByType(mime);
   if (!codec_)
     return false;
@@ -225,6 +233,14 @@ bool AudioEngine::openFd(int fd, int64_t offset, int64_t length) {
 
   sampleRate_ = (sr > 0) ? sr : 48000;
   channelCount_ = (ch > 0) ? ch : 2;
+
+  // Extract duration from format
+  int64_t durationUs = 0;
+  if (AMediaFormat_getInt64(format_, AMEDIAFORMAT_KEY_DURATION, &durationUs)) {
+    durationUs_ = durationUs;
+  } else {
+    durationUs_ = 0;
+  }
 
   codec_ = AMediaCodec_createDecoderByType(mime);
   if (!codec_)

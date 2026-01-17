@@ -20,7 +20,6 @@ class PlayerController(
     private val video = MediaCodecEngine(context, masterClock)
 
     private var hasAudio = false
-    private var playing = false
     private var seeking = false
 
     // Track the currently playing content URI (if any)
@@ -87,7 +86,7 @@ class PlayerController(
         release()
 
         // 🔒 INITIAL BASELINE: ensure UI is latched at 0 and audio is not marked playing
-        playing = false
+        isPlayingState = false
 
         currentUri = uri
 
@@ -109,7 +108,7 @@ class PlayerController(
             hasAudio = NativePlayer.dbgHasAudioTrack()
 
             // 🔴 REQUIRED: reflect native start in UI state immediately
-            playing = true
+            isPlayingState = true
             
 
             android.widget.Toast
@@ -135,7 +134,7 @@ class PlayerController(
 
     override fun pause() {
         // Reflect non-playing state immediately
-        playing = false
+        isPlayingState = false
 
         // 🔒 ALWAYS pause native audio (idempotent)
         NativePlayer.nativePause()
@@ -151,7 +150,7 @@ class PlayerController(
         NativePlayer.nativeResume()
 
         // Always reflect resumed state in UI immediately
-        playing = true
+        isPlayingState = true
     }
 
     override fun seekTo(positionMs: Long) {
@@ -169,7 +168,7 @@ class PlayerController(
         NativePlayer.nativeResume()
 
         // Reflect playing state
-        playing = true
+        isPlayingState = true
     }
 
     override fun release() {
@@ -182,7 +181,7 @@ class PlayerController(
         currentUri = null
 
         hasAudio = false
-        playing = false
+        isPlayingState = false
         seeking = false
     }
 
