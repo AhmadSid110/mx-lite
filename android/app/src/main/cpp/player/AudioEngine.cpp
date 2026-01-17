@@ -458,8 +458,17 @@ void AudioEngine::decodeLoop() {
   // Outer loop governed by threadRunning_
   while (threadRunning_.load(std::memory_order_acquire)) {
 
+    // 🚨 CLOCK GATE - ABSOLUTE FIRST PRIORITY
+    // DO NOTHING if clock is not running - no dequeue, no advance, no write
+    if (!virtualClock_->isRunning()) {
+      gAudioDebug.decodeActive.store(false);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      continue;
+    }
+
     // ⛔ HARD GATE: Sleep if decoding is disabled
     if (!decodeEnabled_.load(std::memory_order_acquire)) {
+      gAudioDebug.decodeActive.store(false);
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
       continue;
     }
@@ -468,9 +477,13 @@ void AudioEngine::decodeLoop() {
     // This paces the decoder exactly to consumption.
     int32_t framesNeeded = framesRequested_.load(std::memory_order_acquire);
     if (framesNeeded <= 0) {
+      gAudioDebug.decodeActive.store(false);
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
+
+    // ✅ All gates passed - decode is active
+    gAudioDebug.decodeActive.store(true);
 
     // Decode ONE buffer cycle (Input + Output)
     // ----------------------------------------
@@ -500,11 +513,6 @@ void AudioEngine::decodeLoop() {
 
     if (outIndex >= 0) {
       uint8_t *buf = AMediaCodec_getOutputBuffer(codec_, outIndex, nullptr);
-
-      if (virtualClock_->isPaused()) {
-        AMediaCodec_releaseOutputBuffer(codec_, outIndex, false);
-        continue; // Paused (shouldn't happen due to gate, but safe)
-      }
 
       if (buf && info.size > 0) {
         int16_t *samples = reinterpret_cast<int16_t *>(buf + info.offset);
@@ -607,15 +615,25 @@ aaudio_data_callback_result_t AudioEngine::dataCallback(AAudioStream *stream,
   if (!engine)
     return AAUDIO_CALLBACK_RESULT_STOP;
 
+  gAudioDebug.callbackCalled.store(true);
+
+  int32_t numSamples = engine->framesToSamples(numFrames);
+
+  // 🚨 CLOCK CHECK - Never stop callback, but respect clock state
+  if (!engine->virtualClock_->isRunning()) {
+    memset(audioData, 0, numSamples * sizeof(int16_t));
+    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+  }
+
   // 1️⃣ Signal demand to the producer (decodeLoop)
   engine->framesRequested_.fetch_add(numFrames, std::memory_order_release);
 
   // 2️⃣ Render audio (pull from ring buffer)
   if (engine->audioOutputEnabled_.load(std::memory_order_acquire)) {
-    engine->renderAudio(static_cast<int16_t *>(audioData), numFrames);
+    engine->renderAudio(static_cast<int16_t *>(audioData), numSamples);
   } else {
     // Output gated - write silence
-    memset(audioData, 0, numFrames * sizeof(int16_t));
+    memset(audioData, 0, numSamples * sizeof(int16_t));
   }
 
   return AAUDIO_CALLBACK_RESULT_CONTINUE;

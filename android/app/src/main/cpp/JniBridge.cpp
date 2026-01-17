@@ -209,6 +209,12 @@ Java_com_mxlite_app_player_NativePlayer_dbgHasAudioTrack(JNIEnv *, jobject) {
   return gAudio->hasAudioTrack() ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_mxlite_app_player_NativePlayer_dbgDecodeActive(JNIEnv *, jobject) {
+  return gAudioDebug.decodeActive.load(std::memory_order_acquire) ? JNI_TRUE
+                                                                  : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_playFd(JNIEnv *env, jobject /* thiz */,
                                                jint fd, jlong offset,
