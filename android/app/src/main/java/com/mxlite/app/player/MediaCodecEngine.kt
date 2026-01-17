@@ -74,6 +74,15 @@ class MediaCodecEngine(
 
         // Use VirtualClock so video never blocks on audio
         val masterUs = NativePlayer.virtualClockUs()
+
+        // 🔒 FIRST FRAME RULE: Always render the first frame after seek
+        // This handles the case where extractor jumps to a sync frame < clock target
+        if (lastRenderedPtsUs == Long.MIN_VALUE) {
+             codec!!.releaseOutputBuffer(outIndex, true)
+             lastRenderedPtsUs = ptsUs
+             return
+        }
+
         if (masterUs <= 0) {
             // OPTIONAL: You can choose to render the first frame blindly here 
             // if you want to avoid a black screen on start, but strictly 
