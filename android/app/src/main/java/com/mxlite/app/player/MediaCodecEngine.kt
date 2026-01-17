@@ -277,24 +277,28 @@ class MediaCodecEngine(
     override fun seekTo(positionMs: Long) {
         val positionUs = positionMs * 1000
         
-        // Disable decode temporarily
-        decodeEnabled = false
-
+        // 🔒 HARD SEEK: Stop decode thread completely to prevent extractor conflict
+        videoRunning = false
+        try {
+            decodeThread?.join()
+        } catch (_: InterruptedException) {}
+        decodeThread = null
+        
         // Flush decoder
         try {
             codec?.flush()
         } catch (_: Exception) {}
-
-        // Seek to explicit target (NOT reading clock)
+        
+        // Seek Extractor to explicit target
         extractor?.seekTo(
             positionUs.coerceAtLeast(0),
             MediaExtractor.SEEK_TO_CLOSEST_SYNC
         )
-
+        
         lastRenderedPtsUs = Long.MIN_VALUE
         
-        // Re-enable decode
-        decodeEnabled = true
+        // Restart decode thread
+        startDecodeLoop()
     }
 
     // Legacy method - preserved for compatibility but deprecated

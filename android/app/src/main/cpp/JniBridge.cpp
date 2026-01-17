@@ -82,9 +82,11 @@ Java_com_mxlite_app_player_NativePlayer_nativeSeek(JNIEnv *, jobject,
 
   if (gAudio) {
     gAudio->seekUs((int64_t)posUs);
-  } else {
-    gVirtualClock.seekUs((int64_t)posUs);
   }
+
+  // ALWAYS update backing clock explicitly to ensure sync
+  // This prevents video freeze if AudioEngine fails to propagate the seek
+  gVirtualClock.seekUs((int64_t)posUs);
   // 🔴 FIX #3: Resume clock after seek
   gVirtualClock.resume();
 }
