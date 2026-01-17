@@ -31,7 +31,7 @@ Java_com_mxlite_app_player_NativePlayer_nativePlay(JNIEnv *env,
                                                    jobject /*thiz*/,
                                                    jstring path) {
 
-  gAudioDebug.nativePlayCalled.store(true); // ✅ ADD THIS LINE
+  gAudioDebug.nativePlayCalled.store(true);
 
   const char *cpath = env->GetStringUTFChars(path, nullptr);
 
@@ -41,6 +41,10 @@ Java_com_mxlite_app_player_NativePlayer_nativePlay(JNIEnv *env,
 
   if (gAudio->open(cpath)) {
     gAudio->start();
+    // 🔴 FIX #1: Mandatory clock start
+    if (!gVirtualClock.isRunning()) {
+      gVirtualClock.start();
+    }
   }
 
   env->ReleaseStringUTFChars(path, cpath);
@@ -57,6 +61,10 @@ Java_com_mxlite_app_player_NativePlayer_nativePlayFd(JNIEnv *, jobject, jint fd,
 
   if (gAudio->openFd(fd, offset, length)) {
     gAudio->start();
+    // 🔴 FIX #1: Mandatory clock start
+    if (!gVirtualClock.isRunning()) {
+      gVirtualClock.start();
+    }
   }
 }
 
@@ -77,6 +85,8 @@ Java_com_mxlite_app_player_NativePlayer_nativeSeek(JNIEnv *, jobject,
   } else {
     gVirtualClock.seekUs((int64_t)posUs);
   }
+  // 🔴 FIX #3: Resume clock after seek
+  gVirtualClock.resume();
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -106,9 +116,9 @@ Java_com_mxlite_app_player_NativePlayer_nativeResume(JNIEnv *, jobject) {
 
   if (gAudio) {
     gAudio->start();
-  } else {
-    gVirtualClock.resume();
   }
+  // 🔴 FIX #2: Mandatory clock resume
+  gVirtualClock.resume();
 }
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -236,5 +246,9 @@ Java_com_mxlite_app_player_NativePlayer_playFd(JNIEnv *env, jobject /* thiz */,
 
   LOGE("MX-AUDIO", "openFd OK, starting audio");
   gAudio->start();
+  // 🔴 FIX #1 (Redundant check for safe keeping): Mandatory clock start
+  if (!gVirtualClock.isRunning()) {
+    gVirtualClock.start();
+  }
   LOGE("MX-AUDIO", "AudioEngine STARTED");
 }
