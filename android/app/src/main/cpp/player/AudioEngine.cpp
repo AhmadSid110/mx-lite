@@ -344,24 +344,28 @@ void AudioEngine::stop() {
 }
 
 void AudioEngine::seekUs(int64_t us) {
-  // 1. HARD STOP decode
+  // 1. Pause logical playback
+  virtualClock_->pause();
   decodeEnabled_.store(false, std::memory_order_release);
 
-  // 2. Reset buffers
+  // 2. Flush PCM immediately (Ring buffer memory cleared in flushRingBuffer)
   flushRingBuffer();
-  if (codec_)
+
+  // 3. Flush decoder & extractor
+  if (codec_) {
     AMediaCodec_flush(codec_);
+  }
 
-  // 3. Seek extractor
-  if (extractor_)
+  if (extractor_) {
     AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
+  }
 
-  // 4. Reset virtual clock
-  virtualClock_->seekUs(us);
-
-  // 5. Resume decode
+  // 4. Resume
   decodeEnabled_.store(true, std::memory_order_release);
   audioOutputEnabled_.store(true, std::memory_order_release);
+
+  virtualClock_->seekUs(us);
+  virtualClock_->start();
 }
 
 /* ===================== AAudio ===================== */
@@ -610,6 +614,8 @@ void AudioEngine::renderAudio(int16_t *out, int32_t samples) {
 }
 
 void AudioEngine::flushRingBuffer() {
+  // 🔥 REQUIRED: Clear memory to prevent ghost audio
+  memset(ringBuffer_, 0, sizeof(ringBuffer_));
   readHead_.store(0, std::memory_order_release);
   writeHead_.store(0, std::memory_order_release);
 }
