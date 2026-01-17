@@ -275,37 +275,34 @@ class MediaCodecEngine(
     }
 
     override fun seekTo(positionMs: Long) {
-        // handled by PlayerController using seekToAudioClock() for precise alignment
-    }
+        val positionUs = positionMs * 1000
+        
+        // Disable decode temporarily
+        decodeEnabled = false
 
-    // Seek video extractor to the current native audio clock without recreating pipeline
-    fun seekToAudioClock() {
-        // Stop decode loop
-        videoRunning = false
+        // Flush decoder
         try {
-            decodeThread?.join()
-        } catch (_: InterruptedException) {
-        }
-        decodeThread = null
+            codec?.flush()
+        } catch (_: Exception) {}
 
-        // Flush decoder but do NOT recreate codec/extractor
-        try { codec?.flush() } catch (_: Exception) {}
-
-        val clockUs = NativePlayer.virtualClockUs()
-        if (clockUs > 0) {
-            extractor?.seekTo(
-                clockUs,
-                MediaExtractor.SEEK_TO_CLOSEST_SYNC
-            )
-        } else {
-            extractor?.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-        }
+        // Seek to explicit target (NOT reading clock)
+        extractor?.seekTo(
+            positionUs.coerceAtLeast(0),
+            MediaExtractor.SEEK_TO_CLOSEST_SYNC
+        )
 
         lastRenderedPtsUs = Long.MIN_VALUE
+        
+        // Re-enable decode
+        decodeEnabled = true
+    }
 
-        // Restart decode loop
-        videoRunning = true
-        startDecodeLoop()
+    // Legacy method - preserved for compatibility but deprecated
+    @Deprecated("Use seekTo(positionMs) with explicit target instead")
+    fun seekToAudioClock() {
+        // Read current clock position
+        val clockUs = NativePlayer.virtualClockUs()
+        seekTo(clockUs / 1000)
     }
 
     // Prepare internal renderer state before resuming audio clock

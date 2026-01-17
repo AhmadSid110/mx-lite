@@ -161,8 +161,8 @@ class PlayerController(
         // 2. Seek Native Clock (atomic)
         NativePlayer.nativeSeek(positionMs * 1000L)
 
-        // 3. Seek Video (matches audio clock)
-        video.seekToAudioClock()
+        // 3. Seek Video (use EXPLICIT target, not live clock)
+        video.seekTo(positionMs)
 
         // 4. Resume Audio (restores flow)
         NativePlayer.nativeResume()
