@@ -24,7 +24,12 @@ object NativePlayer {
         length: Long
     )
     // ✅ NEW: Play using File Descriptor (public)
-    external fun playFd(fd: Int, offset: Long, length: Long)
+    private external fun playFdJni(fd: Int, offset: Long, length: Long)
+
+    fun playFd(fd: Int, offset: Long, length: Long) {
+        playFdJni(fd, offset, length)
+        initialized = true
+    }
     private external fun nativeStop()
     external fun nativeSeek(positionUs: Long)
     private external fun nativeRelease()

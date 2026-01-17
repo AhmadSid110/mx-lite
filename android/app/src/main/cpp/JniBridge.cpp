@@ -237,9 +237,9 @@ Java_com_mxlite_app_player_NativePlayer_dbgGetClockLog(JNIEnv *env, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_mxlite_app_player_NativePlayer_playFd(JNIEnv *env, jobject /* thiz */,
-                                               jint fd, jlong offset,
-                                               jlong length) {
+Java_com_mxlite_app_player_NativePlayer_playFdJni(JNIEnv *env,
+                                                  jobject /* thiz */, jint fd,
+                                                  jlong offset, jlong length) {
 
   if (!gAudio) {
     LOGE("MX-AUDIO", "AudioEngine is NULL, creating new AudioEngine");
