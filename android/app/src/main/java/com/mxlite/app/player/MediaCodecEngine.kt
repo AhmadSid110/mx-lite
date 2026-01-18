@@ -126,9 +126,12 @@ class MediaCodecEngine(
         }
 
         // 5️⃣ RULE: RENDER
+        val localCodec = codec ?: return
         try {
-            codec?.releaseOutputBuffer(index, true)
+            localCodec.releaseOutputBuffer(index, true)
             lastRenderedPtsUs = info.presentationTimeUs
+        } catch (_: UnsupportedOperationException) {
+            videoRunning = false
         } catch (e: Exception) { e.printStackTrace() }
     }
 
@@ -154,7 +157,13 @@ class MediaCodecEngine(
                     // INPUT PATH
                     // Protect extractor read from concurrent seeking/flushing
                     synchronized(extractorLock) {
-                        val inIndex = codec?.dequeueInputBuffer(10_000) ?: -1
+                        val localCodec = codec ?: return@synchronized
+                        val inIndex = try {
+                            localCodec.dequeueInputBuffer(10_000)
+                        } catch (_: UnsupportedOperationException) {
+                            videoRunning = false
+                            return@synchronized
+                        }
                         if (!inputEOS && inIndex >= 0) {
                             val buffer = codec?.getInputBuffer(inIndex)
                             if (buffer != null) {
@@ -176,7 +185,13 @@ class MediaCodecEngine(
 
                     // OUTPUT PATH
                     val info = MediaCodec.BufferInfo()
-                    val outIndex = codec?.dequeueOutputBuffer(info, 10_000) ?: -1
+                    val localCodec = codec ?: return@Thread
+                    val outIndex = try {
+                        localCodec.dequeueOutputBuffer(info, 10_000)
+                    } catch (_: UnsupportedOperationException) {
+                        videoRunning = false
+                        return@Thread
+                    }
 
                     when (outIndex) {
                         MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -297,9 +312,10 @@ class MediaCodecEngine(
         decodeThread = null
 
         // FULL RESET (required for Surface codecs)
-        try { codec?.stop() } catch (_: Exception) {}
-        try { codec?.release() } catch (_: Exception) {}
+        val localCodec = codec
         codec = null
+        try { localCodec?.stop() } catch (_: Exception) {}
+        try { localCodec?.release() } catch (_: Exception) {}
 
         synchronized(extractorLock) {
             extractor?.seekTo(positionUs.coerceAtLeast(0), MediaExtractor.SEEK_TO_CLOSEST_SYNC)
@@ -344,8 +360,11 @@ class MediaCodecEngine(
             decodeThread = null
         }
 
-        try { codec?.stop(); codec?.release() } catch (_: Exception) {}
+        val localCodec = codec
         codec = null
+        try { localCodec?.stop() } catch (_: Exception) {}
+        try { localCodec?.release() } catch (_: Exception) {}
+        
         try { extractor?.release() } catch (_: Exception) {}
         extractor = null
 
@@ -367,12 +386,10 @@ class MediaCodecEngine(
         decodeThread = null
 
         // 2. Release codec safely
-        try {
-            codec?.stop()
-            codec?.release()
-        } catch (_: Exception) {
-        }
+        val localCodec = codec
         codec = null
+        try { localCodec?.stop() } catch (_: Exception) {}
+        try { localCodec?.release() } catch (_: Exception) {}
 
         // 3. Release extractor
         try {
@@ -413,8 +430,10 @@ class MediaCodecEngine(
         try { decodeThread?.join() } catch (_: Exception) {}
         decodeThread = null
 
-        try { codec?.stop(); codec?.release() } catch (_: Exception) {}
+        val localCodec = codec
         codec = null
+        try { localCodec?.stop() } catch (_: Exception) {}
+        try { localCodec?.release() } catch (_: Exception) {}
         
         try { extractor?.release() } catch (_: Exception) {}
         extractor = null
