@@ -23,6 +23,7 @@ class MediaCodecEngine(
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
     private var currentPfd: ParcelFileDescriptor? = null
+    private var videoTrackIndex = -1
 
     @Volatile private var surfaceReady = false
     @Volatile private var videoRunning = false
@@ -65,6 +66,14 @@ class MediaCodecEngine(
     private fun handleVideoFrame(outIndex: Int, info: MediaCodec.BufferInfo) {
         val index = outIndex
         
+        // 🔒 PHASE 2: SURFACE VALIDITY AT RENDER TIME
+        if (surface == null || !surface!!.isValid) {
+            try {
+                codec?.releaseOutputBuffer(index, false)
+            } catch (_: Exception) {}
+            return
+        }
+
         // 1️⃣ RULE: FIRST FRAME AFTER SEEK -> ALWAYS RENDER
         // Allows the preview frame to show even if "Paused"
         if (lastRenderedPtsUs == Long.MIN_VALUE) {
@@ -169,9 +178,23 @@ class MediaCodecEngine(
                     val info = MediaCodec.BufferInfo()
                     val outIndex = codec?.dequeueOutputBuffer(info, 10_000) ?: -1
 
-                    if (outIndex >= 0) {
-                        handleVideoFrame(outIndex, info)
-                    } 
+                    when (outIndex) {
+                        MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            // 🏁 RULE 7: Required by some GPUs for rendering
+                            val newFormat = codec?.outputFormat
+                            Log.d("MediaCodecEngine", "RULE 7: Format changed: $newFormat")
+                        }
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                            // No-op
+                        }
+                        else -> if (outIndex >= 0) {
+                            // 🏁 RULE 6: Log once to confirm buffer production
+                            if (lastRenderedPtsUs == Long.MIN_VALUE) {
+                                Log.d("MediaCodecEngine", "RULE 6: First buffer produced at index $outIndex")
+                            }
+                            handleVideoFrame(outIndex, info)
+                        }
+                    }
 
                 } catch (e: Exception) {
                     Log.e("MediaCodecEngine", "Decode loop error", e)
@@ -185,7 +208,10 @@ class MediaCodecEngine(
     // =========================================================================
 
     fun play(fd: FileDescriptor) {
-        if (!hasSurface()) return
+        if (!hasSurface()) {
+            Log.e("MediaCodecEngine", "play() ABORT: Surface not ready/valid")
+            return
+        }
         releaseResources()
 
         try {
@@ -201,6 +227,7 @@ class MediaCodecEngine(
             }
 
             if (trackIndex < 0) return
+            videoTrackIndex = trackIndex
 
             extractor!!.selectTrack(trackIndex)
             val format = extractor!!.getTrackFormat(trackIndex)
@@ -218,6 +245,10 @@ class MediaCodecEngine(
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!).apply {
                 configure(format, surface, null, 0)
                 start()
+                
+                // 🕵️ RULE 8: Verify Color Format is Surface-compatible
+                val colorFormat = outputFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT)
+                Log.d("MediaCodecEngine", "RULE 8: Decoder started with ColorFormat=$colorFormat")
             }
 
             inputEOS = false
@@ -260,15 +291,31 @@ class MediaCodecEngine(
     override fun seekTo(positionMs: Long) {
         val positionUs = positionMs * 1000L
 
-        // Hard seek: Kill thread
+        // Stop thread
         videoRunning = false
         try { decodeThread?.join() } catch (_: Exception) {}
         decodeThread = null
 
-        try { codec?.flush() } catch (_: Exception) {}
-        
+        // FULL RESET (required for Surface codecs)
+        try { codec?.stop() } catch (_: Exception) {}
+        try { codec?.release() } catch (_: Exception) {}
+        codec = null
+
         synchronized(extractorLock) {
             extractor?.seekTo(positionUs.coerceAtLeast(0), MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        }
+
+        // Recreate codec
+        if (extractor != null && videoTrackIndex >= 0) {
+            try {
+                val format = extractor!!.getTrackFormat(videoTrackIndex)
+                codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!).apply {
+                    configure(format, surface, null, 0)
+                    start()
+                }
+            } catch (e: Exception) {
+                Log.e("MediaCodecEngine", "Failed to recreate codec in seekTo", e)
+            }
         }
 
         lastRenderedPtsUs = Long.MIN_VALUE
@@ -278,29 +325,7 @@ class MediaCodecEngine(
     // 🔒 FIX: RACE-PROOF SEEK PREVIEW
     // Temporarily gates decode and uses lock to ensure safe atomic Preview
     override fun onSeekPreview(positionMs: Long) {
-        if (!videoRunning) return
-
-        // 1. Logic freeze
-        val wasDecoding = decodeEnabled
-        decodeEnabled = false
-
-        val positionUs = positionMs * 1000L
-        
-        synchronized(extractorLock) {
-            try {
-                // 2. Hardware reset
-                codec?.flush()
-                extractor?.seekTo(positionUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-                
-                // 3. Re-arm trigger (MIN_VALUE overrides the !decodeEnabled gate for ONE frame)
-                lastRenderedPtsUs = Long.MIN_VALUE
-            } catch (_: Exception) {}
-        }
-        
-        // 4. Restore state
-        // If we were paused, this keeps decodeEnabled=false, but MIN_VALUE allows 1 frame.
-        // If we were playing, this resumes play logic (though typically we pause before preview).
-        decodeEnabled = wasDecoding
+        // UI-only update. NO video decode.
     }
 
     override fun detachSurface() {
@@ -312,7 +337,13 @@ class MediaCodecEngine(
     }
 
     override fun recreateVideo() {
-        if (videoRunning) return
+        // 🔒 FIX A-2: Force stop if running to allow fresh recreation on new Surface
+        if (videoRunning) {
+            videoRunning = false
+            try { decodeThread?.join() } catch (_: Exception) {}
+            decodeThread = null
+        }
+
         try { codec?.stop(); codec?.release() } catch (_: Exception) {}
         codec = null
         try { extractor?.release() } catch (_: Exception) {}
@@ -323,10 +354,56 @@ class MediaCodecEngine(
         }
     }
 
+    override fun stop() {
+        // 1. Stop decode loop
+        videoRunning = false
+        decodeEnabled = false
+        renderEnabled = false
+
+        try {
+            decodeThread?.join()
+        } catch (_: Exception) {
+        }
+        decodeThread = null
+
+        // 2. Release codec safely
+        try {
+            codec?.stop()
+            codec?.release()
+        } catch (_: Exception) {
+        }
+        codec = null
+
+        // 3. Release extractor
+        try {
+            extractor?.release()
+        } catch (_: Exception) {
+        }
+        extractor = null
+
+        // 4. Reset state
+        inputEOS = false
+        lastRenderedPtsUs = Long.MIN_VALUE
+        durationMs = 0
+        videoTrackIndex = -1
+
+        // NOTE:
+        // - surface is NOT cleared here
+        // - currentPfd is NOT closed here
+        // - play() will reinitialize everything
+    }
+
     override fun release() {
-        releaseResources()
-        try { currentPfd?.close() } catch (_: Exception) {}
+        stop()
+
+        try {
+            currentPfd?.close()
+        } catch (_: Exception) {
+        }
         currentPfd = null
+
+        surface = null
+        surfaceReady = false
     }
 
     private fun releaseResources() {
@@ -341,6 +418,7 @@ class MediaCodecEngine(
         
         try { extractor?.release() } catch (_: Exception) {}
         extractor = null
+        videoTrackIndex = -1
     }
 
     // Unused / Deprecated

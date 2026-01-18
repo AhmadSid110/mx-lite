@@ -17,6 +17,7 @@ object NativePlayer {
 
     /* ================= JNI (PRIVATE) ================= */
 
+    external fun nativeInit()
     private external fun nativePlay(path: String)
     private external fun nativePlayFd(
         fd: Int,
@@ -36,13 +37,13 @@ object NativePlayer {
     external fun virtualClockUs(): Long
     external fun nativePause()
     external fun nativeResume()
-    external fun nativeGetDurationUs(): Long
+    external fun nativeGetDurationMs(): Long
 
     var initialized = false
         private set
 
     val durationMs: Long
-        get() = nativeGetDurationUs() / 1000L
+        get() = nativeGetDurationMs()
 
     fun pause() {
         nativePause()

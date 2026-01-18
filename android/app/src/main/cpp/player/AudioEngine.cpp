@@ -360,12 +360,8 @@ void AudioEngine::seekUs(int64_t us) {
     AMediaExtractor_seekTo(extractor_, us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
   }
 
-  // 4. Resume
-  decodeEnabled_.store(true, std::memory_order_release);
-  audioOutputEnabled_.store(true, std::memory_order_release);
-
+  // 4. Update clock position (but do NOT start)
   virtualClock_->seekUs(us);
-  virtualClock_->start();
 }
 
 /* ===================== AAudio ===================== */

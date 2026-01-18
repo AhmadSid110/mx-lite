@@ -21,10 +21,32 @@ static AudioEngine *gAudio = nullptr;
  */
 extern AudioDebug gAudioDebug;
 extern std::atomic<bool> gAudioHealthy;
+static std::atomic<int64_t> gDurationUs{0};
 
 /* ───────────────────────────── */
 /* Playback control JNI */
 /* ───────────────────────────── */
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_mxlite_app_player_NativePlayer_nativeInit(JNIEnv *, jobject) {
+  // 1. Stop and destroy existing audio engine if any
+  if (gAudio) {
+    gAudio->stop();
+    delete gAudio;
+    gAudio = nullptr;
+  }
+
+  // 2. Reset VirtualClock (authoritative time source)
+  gVirtualClock.reset();
+
+  // 3. Reset debug / state flags (important for overlays)
+  gAudioDebug.decodeActive.store(false, std::memory_order_release);
+  gAudioDebug.callbackCalled.store(false, std::memory_order_release);
+  gAudioDebug.audioStarted.store(false, std::memory_order_release);
+
+  // 4. Reset duration (will be set by open/playFd)
+  gDurationUs.store(0, std::memory_order_release);
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_mxlite_app_player_NativePlayer_nativePlay(JNIEnv *env,
@@ -60,6 +82,7 @@ Java_com_mxlite_app_player_NativePlayer_nativePlayFd(JNIEnv *, jobject, jint fd,
   }
 
   if (gAudio->openFd(fd, offset, length)) {
+    gDurationUs.store(gAudio->getDurationUs());
     gAudio->start();
     // 🔴 FIX #1: Mandatory clock start
     if (!gVirtualClock.isRunning()) {
@@ -126,12 +149,8 @@ Java_com_mxlite_app_player_NativePlayer_nativeResume(JNIEnv *, jobject) {
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_mxlite_app_player_NativePlayer_nativeGetDurationUs(JNIEnv *, jobject) {
-
-  if (gAudio) {
-    return gAudio->getDurationUs();
-  }
-  return 0;
+Java_com_mxlite_app_player_NativePlayer_nativeGetDurationMs(JNIEnv *, jobject) {
+  return gDurationUs.load() / 1000;
 }
 
 /* ───────────────────────────── */
@@ -259,6 +278,7 @@ Java_com_mxlite_app_player_NativePlayer_playFdJni(JNIEnv *env,
     return;
   }
 
+  gDurationUs.store(gAudio->getDurationUs());
   LOGE("MX-AUDIO", "openFd OK, starting audio");
   gAudio->start();
   // 🔴 FIX #1 (Redundant check for safe keeping): Mandatory clock start

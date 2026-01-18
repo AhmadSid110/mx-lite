@@ -11,6 +11,7 @@ struct AudioDebug {
   // AAudio state
   std::atomic<bool> aaudioOpened{false};
   std::atomic<bool> aaudioStarted{false};
+  std::atomic<bool> audioStarted{false};
   std::atomic<int> aaudioError{0};
   std::atomic<int> openStage{0};
 

@@ -5,33 +5,25 @@ import android.net.Uri
 
 interface PlayerEngine {
 
-    fun attachSurface(surface: Surface)
-
-    // New URI-based play API
-    fun play(uri: Uri)
-
-    // Current playing URI (nullable)
     val currentUri: Uri?
-
-    // Recreate only the video pipeline when surface is recreated
-    fun recreateVideo()
-
-    // Detach the surface and free video resources
-    fun detachSurface()
-
-    fun pause()
-
-    fun resume()
-
-    fun seekTo(positionMs: Long)
-
-    fun release()
-
     val durationMs: Long
     val currentPositionMs: Long
     val isPlaying: Boolean
 
-    // Seek Latch API
+    fun play(uri: Uri)
+    fun pause()
+    fun resume()
+
+    // 🆕 HARD STOP
+    fun stop()
+
+    fun seekTo(positionMs: Long)
+
+    fun attachSurface(surface: Surface)
+    fun detachSurface()
+    fun recreateVideo()
+    fun release()
+
     fun onSeekStart()
     fun onSeekPreview(positionMs: Long)
     fun onSeekCommit(positionMs: Long)

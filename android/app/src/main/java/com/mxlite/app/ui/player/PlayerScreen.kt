@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.documentfile.provider.DocumentFile
 import com.mxlite.app.player.PlayerEngine
@@ -100,6 +101,10 @@ fun PlayerScreen(
     var controlsVisible by remember { mutableStateOf(true) }
     var subtitleLine by remember { mutableStateOf<SubtitleCue?>(null) }
     var playbackStarted by remember { mutableStateOf(false) }
+
+    // 🔒 ROOT CAUSE #1: Persistent Surface identity
+    var managedSurface by remember { mutableStateOf<android.view.Surface?>(null) }
+    var managedTexture by remember { mutableStateOf<android.graphics.SurfaceTexture?>(null) }
 
     var dragging by remember { mutableStateOf(false) }
     var sliderPos by remember { mutableStateOf(0f) }
@@ -260,6 +265,10 @@ fun PlayerScreen(
         onDispose {
             playbackStarted = false
             engine.release()
+            
+            // 🔒 Final manual release of owned resources
+            managedSurface?.release()
+            managedTexture?.release()
         }
     }
 
@@ -284,13 +293,14 @@ fun PlayerScreen(
             AndroidView(
                 modifier = Modifier
                     .fillMaxSize()
+                    .zIndex(1f)
                     .focusable(false)
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = { controlsVisible = !controlsVisible },
                             onDoubleTap = { offset ->
                                 val half = size.width / 2
-                                val delta = if (offset.x < half) -10_000 else 10_000
+                                val delta = if (offset.x < half.toFloat()) -10_000L else 10_000L
                                 engine.seekTo(
                                     (engine.currentPositionMs + delta)
                                         .coerceIn(0, engine.durationMs)
@@ -300,6 +310,9 @@ fun PlayerScreen(
                     },
                 factory = { ctx ->
                     android.view.TextureView(ctx).apply {
+                        // 🔒 ROOT CAUSE #3: Forced HW Acceleration
+                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                        
                         surfaceTextureListener =
                             object : android.view.TextureView.SurfaceTextureListener {
 
@@ -308,14 +321,16 @@ fun PlayerScreen(
                                     width: Int,
                                     height: Int
                                 ) {
-                                    val surface = android.view.Surface(surfaceTexture)
-                                    engine.attachSurface(surface)
+                                    // 🛡️ Rule 2: Non-zero size guard
+                                    check(width > 0 && height > 0) { "TextureView size is ZERO" }
 
-                                    android.widget.Toast.makeText(
-                                        ctx,
-                                        "Texture surface available",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
+                                    surfaceTexture.setDefaultBufferSize(width, height)
+                                    if (managedTexture != surfaceTexture) {
+                                        managedSurface?.release()
+                                        managedSurface = android.view.Surface(surfaceTexture)
+                                        managedTexture = surfaceTexture
+                                    }
+                                    engine.attachSurface(managedSurface!!)
 
                                     engine.play(uri)
                                 }
@@ -324,13 +339,16 @@ fun PlayerScreen(
                                     surface: android.graphics.SurfaceTexture,
                                     width: Int,
                                     height: Int
-                                ) = Unit
+                                ) {
+                                    surface.setDefaultBufferSize(width, height)
+                                }
 
                                 override fun onSurfaceTextureDestroyed(
-                                    surface: android.graphics.SurfaceTexture
+                                    st: android.graphics.SurfaceTexture
                                 ): Boolean {
                                     engine.detachSurface()
-                                    return true
+                                    // 🔒 ROOT CAUSE #2: Explicit ownership
+                                    return false 
                                 }
 
                                 override fun onSurfaceTextureUpdated(

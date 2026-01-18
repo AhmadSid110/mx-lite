@@ -4,35 +4,34 @@ import android.content.Context
 import android.net.Uri
 import android.view.Surface
 import android.os.ParcelFileDescriptor
-import java.io.File
+import android.util.Log
 
 class PlayerController(
     private val context: Context
 ) : PlayerEngine {
 
+    // 🔒 CLOCK: Direct pass-through to C++ VirtualClock
     private val masterClock = object : PlaybackClock {
         override val positionMs: Long
-            get() {
-                return NativePlayer.virtualClockUs() / 1000
-            }
+            get() = NativePlayer.virtualClockUs() / 1000
     }
 
     private val video = MediaCodecEngine(context, masterClock)
-
-    private var hasAudio = false
     
-    // Track the currently playing content URI (if any)
+    // Audio FD management
+    private var audioPfd: ParcelFileDescriptor? = null
+    private var hasAudio = false
+
     override var currentUri: Uri? = null
         private set
 
     override val durationMs: Long
         get() = NativePlayer.durationMs
 
-    //  PURE NATIVE CLOCK (User Request: No caching, no fallbacks)
     override val currentPositionMs: Long
         get() {
-             val micros = NativePlayer.virtualClockUs()
-             return if (micros < 0) 0L else micros / 1000L
+            val micros = NativePlayer.virtualClockUs()
+            return if (micros < 0) 0L else micros / 1000L
         }
 
     // 🧱 AUTHORITATIVE STATE MODEL
@@ -46,143 +45,166 @@ class PlayerController(
     private var playbackState: PlaybackState = PlaybackState.STOPPED
     private var wasPlayingBeforeDrag = false
 
+    // 🔒 isPlaying is strictly defined by our intent
     override val isPlaying: Boolean
         get() = playbackState == PlaybackState.PLAYING
 
-    // 🟢 PUBLIC ENTRY POSTS (ONLY THESE)
-    
-    override fun onSeekStart() { // onSeekDragStart
-        if (playbackState == PlaybackState.DRAGGING) return
+    // =========================================================================
+    // 🟢 PUBLIC ENTRY POINTS
+    // =========================================================================
 
-        wasPlayingBeforeDrag = (playbackState == PlaybackState.PLAYING)
-        playbackState = PlaybackState.DRAGGING
-
-        // Pause clock ONLY if it was running
-        if (wasPlayingBeforeDrag) {
-            NativePlayer.nativePause()
-        }
-
-        // Hard stop video decode (no thread destroy)
-        video.pause() // decodeEnabled = false
-    }
-
-    override fun onSeekPreview(positionMs: Long) { // onSeekDrag
-        if (playbackState != PlaybackState.DRAGGING) return
-        
-        // UI updates ONLY
-        // ❌ NO nativeSeek
-        // ❌ NO resume
-        // ❌ NO decode
-        // ❌ NO extractor access
-    }
-
-    override fun onSeekCommit(positionMs: Long) { // onSeekDragEnd
-        if (playbackState != PlaybackState.DRAGGING) return
-
-        // 1. SEEK CLOCK (GROUND TRUTH)
-        NativePlayer.nativeSeek(positionMs * 1000L)
-
-        // 2. HARD VIDEO SEEK (THREAD-SAFE)
-        video.seekTo(positionMs)
-
-        // 3. RESUME ONLY IF IT WAS PLAYING BEFORE
-        if (wasPlayingBeforeDrag) {
-            video.prepareResume()
-            NativePlayer.nativeResume()
-            playbackState = PlaybackState.PLAYING
-        } else {
-            playbackState = PlaybackState.PAUSED
-        }
-    }
-
-    override fun attachSurface(surface: Surface) {
-        video.attachSurface(surface)
-    }
-
-    // ✅ NEW: Play directly from a content URI
     override fun play(uri: Uri) {
+        // 1. Clean slate
         release()
         
         playbackState = PlaybackState.STOPPED
         currentUri = uri
 
         try {
+            // 2. Initialize Native Audio / Clock
+            NativePlayer.nativeInit()
+
+            // 3. Open Audio FD
             val pfd = context.contentResolver.openFileDescriptor(uri, "r")
                 ?: throw IllegalStateException("PFD null")
+            audioPfd = pfd
             
-            // Sets initialized = true (via wrapper)
+            // Pass FD to C++
             NativePlayer.playFd(pfd.fd, 0L, -1)
-            
             hasAudio = NativePlayer.dbgHasAudioTrack()
-            playbackState = PlaybackState.PLAYING
             
+            // 4. Start Video Engine (Starts PAUSED)
             video.play(uri)
 
+            // 🔒 CRITICAL FIX: INITIAL HANDSHAKE
+            // START CLOCK FIRST
+            NativePlayer.nativeResume()
+            // THEN open video gates
+            video.resume()
+            
+            playbackState = PlaybackState.PLAYING
+
         } catch (e: Throwable) {
-           // ...
+            e.printStackTrace()
+            stop()
         }
     }
 
     override fun pause() {
+        if (playbackState == PlaybackState.STOPPED) return
         playbackState = PlaybackState.PAUSED
+        
         // 🔒 Direct pass-through
         NativePlayer.nativePause()
         video.pause()
     }
 
     override fun resume() {
-        video.prepareResume()
-        video.resume() 
+        if (playbackState == PlaybackState.STOPPED) return
+        
+        // 🔒 Resume logic
+        video.resume()
         NativePlayer.nativeResume()
         playbackState = PlaybackState.PLAYING
     }
 
-    override fun seekTo(positionMs: Long) {
-        // 🔒 DIRECT SEEK (No pause, no resume, no guards)
-        // Note: This API should ideally be restricted, but interface requires it.
-        // It bypasses the drag state machine, so we assume it respects current state?
-        // User said: "❌ No other code may call seek() directly."
-        // But if UI calls this (e.g. double tap), we must handle it.
-        // For now, implementing as direct pass-through as per previous logic, 
-        // but ensuring it doesn't break state if we are NOT dragging.
-        
-        if (playbackState == PlaybackState.DRAGGING) {
-             // If dragging, ignore external seeks? Or commit? 
-             // Ideally we shouldn't be here if dragging.
-             return 
-        }
+    override fun stop() {
+        if (playbackState == PlaybackState.STOPPED) return
+
+        playbackState = PlaybackState.STOPPED
+
+        NativePlayer.release()   // Audio + clock
+        video.stop()             // Video only
+
+        try { audioPfd?.close() } catch (_: Exception) {}
+        audioPfd = null
+    }
+
+    // =========================================================================
+    // 🟢 SEEK / DRAG STATE MACHINE
+    // =========================================================================
+
+    override fun onSeekStart() { // Drag Start
+        if (playbackState == PlaybackState.DRAGGING) return
+
+        wasPlayingBeforeDrag = (playbackState == PlaybackState.PLAYING)
+        playbackState = PlaybackState.DRAGGING
+
+        NativePlayer.nativePause()
+        video.pause()
+    }
+
+    override fun onSeekPreview(positionMs: Long) { // Drag Move
+        if (playbackState != PlaybackState.DRAGGING) return
+        video.onSeekPreview(positionMs)
+    }
+
+    override fun onSeekCommit(positionMs: Long) { // Drag End
+        if (playbackState != PlaybackState.DRAGGING) return
 
         NativePlayer.nativeSeek(positionMs * 1000L)
         video.seekTo(positionMs)
+
+        if (wasPlayingBeforeDrag) {
+            video.resume()
+            NativePlayer.nativeResume()
+            playbackState = PlaybackState.PLAYING
+        } else {
+            playbackState = PlaybackState.PAUSED
+            // No resume. Video stays on seek frame.
+        }
     }
 
-    override fun release() {
-        video.setRenderEnabled(false)
+    override fun seekTo(positionMs: Long) {
+        // Direct seek (e.g. 10s skip)
+        if (playbackState == PlaybackState.DRAGGING) return
 
-        if (hasAudio) NativePlayer.release()
-        video.release()
-
-        // Clear current URI when fully releasing
-        currentUri = null
-
-        hasAudio = false
-        playbackState = PlaybackState.STOPPED
+        NativePlayer.nativeSeek(positionMs * 1000L)
+        video.seekTo(positionMs)
+        
+        // 🔒 FIX #3: Re-open gates if we are playing
+        if (playbackState == PlaybackState.PLAYING) {
+            video.resume()
+        }
     }
 
-    // Detach surface (called from UI when the Surface disappears)
+    // =========================================================================
+    // 🟢 LIFECYCLE
+    // =========================================================================
+
+    override fun attachSurface(surface: Surface) {
+        video.attachSurface(surface)
+        if (playbackState != PlaybackState.STOPPED) {
+             video.recreateVideo()
+             
+             // 🔒 FIX #1: RESTORE GATES
+             // If we were playing, we MUST re-enable the render gate
+             // after the surface-triggered recreateVideo().
+             if (playbackState == PlaybackState.PLAYING) {
+                 video.resume()
+             }
+        }
+    }
+
     override fun detachSurface() {
-        // stop video rendering without stopping audio
         video.detachSurface()
     }
 
-    // Recreate video safely using the last known URI
     override fun recreateVideo() {
         if (currentUri == null) return
-
-        // Avoid restarting if video engine is already running
-        if (video.isPlaying) return
-
-        // Restart only the video (audio keeps playing)
         video.recreateVideo()
+    }
+
+    override fun release() {
+        playbackState = PlaybackState.STOPPED
+        
+        NativePlayer.release()
+        video.release()
+        
+        try { audioPfd?.close() } catch (_: Exception) {}
+        audioPfd = null
+        
+        currentUri = null
+        hasAudio = false
     }
 }
