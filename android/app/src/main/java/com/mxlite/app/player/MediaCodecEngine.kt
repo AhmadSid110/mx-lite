@@ -1,35 +1,46 @@
 package com.mxlite.app.player
 
 import android.content.Context
-import android.net.Uri
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.Surface
-import android.os.ParcelFileDescriptor
+import java.io.FileDescriptor
+import kotlin.math.min
 
 class MediaCodecEngine(
     private val context: Context,
     private val clock: PlaybackClock
 ) : PlayerEngine {
 
-    // 🔒 Video engine does NOT own URI state
-    override val currentUri: android.net.Uri?
+    override val currentUri: Uri?
         get() = null
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
     private var surface: Surface? = null
+    private var currentPfd: ParcelFileDescriptor? = null
 
     @Volatile private var surfaceReady = false
     @Volatile private var videoRunning = false
-    @Volatile private var renderEnabled = true
+    
+    // State Flags
+    @Volatile private var renderEnabled = false
     @Volatile private var decodeEnabled = false
     @Volatile private var inputEOS = false
 
     private var decodeThread: Thread? = null
-    private var lastRenderedPtsUs: Long = Long.MIN_VALUE
+    
+    // 🔒 LOCK: Extractor Serialization
+    // Prevents onSeekPreview (Main Thread) from racing with startDecodeLoop (Background)
+    private val extractorLock = Any()
+    
+    // 🔒 LOCK: Decode Gate State
+    // acts as the key for "First Frame After Seek" logic
+    @Volatile private var lastRenderedPtsUs: Long = Long.MIN_VALUE
 
     override var durationMs: Long = 0
         private set
@@ -37,233 +48,199 @@ class MediaCodecEngine(
     override val currentPositionMs: Long
         get() = NativePlayer.virtualClockUs() / 1000
 
+    // 🔒 STATE LOGIC FIX: Playback = Enabled + Active Thread
     override val isPlaying: Boolean
-        get() = videoRunning
+        get() = decodeEnabled && renderEnabled && videoRunning
 
     override fun attachSurface(surface: Surface) {
         this.surface = surface
         surfaceReady = true
     }
 
-    fun setRenderEnabled(enabled: Boolean) {
-        renderEnabled = enabled
-    }
-
     fun hasSurface(): Boolean = surfaceReady && surface?.isValid == true
 
-    private fun handleVideoFrame(
-        outIndex: Int,
-        info: MediaCodec.BufferInfo
-    ) {
-        Log.d("VIDEO", "render=$renderEnabled pts=${info.presentationTimeUs}")
+    // =========================================================================
+    // 🟢 CORE SYNC LOGIC
+    // =========================================================================
+    private fun handleVideoFrame(outIndex: Int, info: MediaCodec.BufferInfo) {
+        val index = outIndex
         
-        // 🔑 HARD GATE: when audio paused or seeking, never render or wait
-        if (!renderEnabled) {
-            codec!!.releaseOutputBuffer(outIndex, false)
-            lastRenderedPtsUs = info.presentationTimeUs
-            return
-        }
-
-        val ptsUs = info.presentationTimeUs
-
-        // Drop backward / duplicate frames
-        if (lastRenderedPtsUs != Long.MIN_VALUE && ptsUs <= lastRenderedPtsUs) {
-            codec!!.releaseOutputBuffer(outIndex, false)
-            return
-        }
-
-        // Use VirtualClock so video never blocks on audio
-        val masterUs = NativePlayer.virtualClockUs()
-
-        // 🔒 FIRST FRAME RULE: Always render the first frame after seek
-        // This handles the case where extractor jumps to a sync frame < clock target
+        // 1️⃣ RULE: FIRST FRAME AFTER SEEK -> ALWAYS RENDER
+        // Allows the preview frame to show even if "Paused"
         if (lastRenderedPtsUs == Long.MIN_VALUE) {
-             codec!!.releaseOutputBuffer(outIndex, true)
-             lastRenderedPtsUs = ptsUs
-             return
-        }
-
-        if (masterUs <= 0) {
-            // OPTIONAL: You can choose to render the first frame blindly here 
-            // if you want to avoid a black screen on start, but strictly 
-            // following the clock is safer for sync.
-            codec!!.releaseOutputBuffer(outIndex, false)
+            try {
+                codec?.releaseOutputBuffer(index, true)
+                lastRenderedPtsUs = info.presentationTimeUs
+            } catch (e: Exception) { e.printStackTrace() }
             return
         }
 
-        val diffUs = ptsUs - masterUs
-        when {
-            diffUs > 15_000 -> {
-                // Video is early. Wait for VirtualClock.
-                val sleepMs = diffUs / 1000
-                if (sleepMs > 0) Thread.sleep(sleepMs)
-
-                codec!!.releaseOutputBuffer(outIndex, true)
-                lastRenderedPtsUs = ptsUs
-            }
-            diffUs < -60_000 -> {
-                // Video is late. Drop to catch up.
-                codec!!.releaseOutputBuffer(outIndex, false)
-            }
-            else -> {
-                // On time. Render.
-                codec!!.releaseOutputBuffer(outIndex, true)
-                lastRenderedPtsUs = ptsUs
-            }
+        // 2️⃣ RULE: PAUSE → DROP (DEADLOCK PREVENTION)
+        // If render is disabled, drop immediately. NEVER hold the buffer.
+        if (!renderEnabled) {
+            try { codec?.releaseOutputBuffer(index, false) } catch (_: Exception) {}
+            return
         }
+
+        // 3️⃣ RULE: SYNC LOOP (TIMING)
+        // Check clock once at top of loop
+        var clockUs = NativePlayer.virtualClockUs()
+        var diffUs = info.presentationTimeUs - clockUs
+
+        while (diffUs > 0 && videoRunning) {
+            // Check state integrity (User might have paused during sleep)
+            if (!renderEnabled) {
+                try { codec?.releaseOutputBuffer(index, false) } catch (_: Exception) {}
+                return
+            }
+
+            // Sleep calculation:
+            // - If >20ms away, sleep conservative amount (diff - 10ms) to avoid JNI thrashing
+            // - If <20ms away, sleep small (2ms) for precision
+            // Cap max sleep to 50ms for responsiveness
+            val sleepMs = when {
+                diffUs > 20_000 -> min((diffUs / 1000) - 10, 50)
+                else -> 2
+            }
+            
+            try { Thread.sleep(sleepMs) } catch (e: InterruptedException) { return }
+            
+            // Re-read clock only after wake-up
+            clockUs = NativePlayer.virtualClockUs()
+            diffUs = info.presentationTimeUs - clockUs
+        }
+
+        // 4️⃣ RULE: DROP LATE FRAMES (>50ms behind)
+        if (diffUs < -50_000) {
+            try { codec?.releaseOutputBuffer(index, false) } catch (_: Exception) {}
+            return
+        }
+
+        // 5️⃣ RULE: RENDER
+        try {
+            codec?.releaseOutputBuffer(index, true)
+            lastRenderedPtsUs = info.presentationTimeUs
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
+    // =========================================================================
+    // 🟢 DECODE LOOP
+    // =========================================================================
     private fun startDecodeLoop() {
         if (decodeThread?.isAlive == true) return
 
         videoRunning = true
-        decodeEnabled = true
-
+        
         decodeThread = Thread {
             while (videoRunning && !Thread.currentThread().isInterrupted) {
-
-                // 🔑 HARD GATE: Decode should not run when disabled (paused)
-                if (!decodeEnabled) {
-                    try {
-                        Thread.sleep(2)
-                    } catch (e: InterruptedException) {
-                        break
-                    }
+                
+                // 🔒 INVARIANT: PAUSE GATE
+                // If paused AND the seek frame is already done, sleep.
+                if (!decodeEnabled && lastRenderedPtsUs != Long.MIN_VALUE) {
+                    try { Thread.sleep(10) } catch (e: InterruptedException) { break }
                     continue
                 }
 
-                // INPUT
-                val inIndex = codec?.dequeueInputBuffer(0) ?: break
-                if (!inputEOS && inIndex >= 0) {
-                    val buffer = codec!!.getInputBuffer(inIndex)!!
-                    val size = extractor!!.readSampleData(buffer, 0)
-
-                    if (size > 0) {
-                        val pts = extractor!!.sampleTime
-                        codec!!.queueInputBuffer(inIndex, 0, size, pts, 0)
-                        extractor!!.advance()
-                    } else {
-                        codec!!.queueInputBuffer(
-                            inIndex,
-                            0,
-                            0,
-                            0,
-                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                        )
-                        inputEOS = true
+                try {
+                    // INPUT PATH
+                    // Protect extractor read from concurrent seeking/flushing
+                    synchronized(extractorLock) {
+                        val inIndex = codec?.dequeueInputBuffer(10_000) ?: -1
+                        if (!inputEOS && inIndex >= 0) {
+                            val buffer = codec?.getInputBuffer(inIndex)
+                            if (buffer != null) {
+                                val size = extractor?.readSampleData(buffer, 0) ?: -1
+                                if (size > 0) {
+                                    val pts = extractor!!.sampleTime
+                                    codec?.queueInputBuffer(inIndex, 0, size, pts, 0)
+                                    extractor?.advance()
+                                } else {
+                                    codec?.queueInputBuffer(
+                                        inIndex, 0, 0, 0,
+                                        MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                    )
+                                    inputEOS = true
+                                }
+                            }
+                        }
                     }
-                }
 
-                // OUTPUT
-                val info = MediaCodec.BufferInfo()
-                val outIndex = codec!!.dequeueOutputBuffer(info, 2_000)
+                    // OUTPUT PATH
+                    val info = MediaCodec.BufferInfo()
+                    val outIndex = codec?.dequeueOutputBuffer(info, 10_000) ?: -1
 
-                if (outIndex >= 0) {
-                    handleVideoFrame(outIndex, info)
+                    if (outIndex >= 0) {
+                        handleVideoFrame(outIndex, info)
+                    } 
+
+                } catch (e: Exception) {
+                    Log.e("MediaCodecEngine", "Decode loop error", e)
                 }
             }
-        }
-
-        decodeThread!!.start()
+        }.apply { start() }
     }
 
-    private var currentPfd: ParcelFileDescriptor? = null
+    // =========================================================================
+    // 🟢 PUBLIC API
+    // =========================================================================
 
-    // ✅ NEW: accept FileDescriptor directly
-    // NOTE: This method does NOT take ownership of the passed FileDescriptor.
-    // The caller must ensure the FD remains valid for the duration of playback,
-    // or (preferably) open a dedicated ParcelFileDescriptor via play(uri) so the
-    // engine can manage its lifecycle.
-    fun play(fd: java.io.FileDescriptor) {
-        android.util.Log.e("MX-VIDEO", "MediaCodecEngine.play(fd): hasSurface=${hasSurface()}")
-        if (!hasSurface()) {
-            // Do NOT start codec without a surface
-            android.util.Log.e("MX-VIDEO", "No surface - aborting video start")
-            return
-        }
-
-        release()
+    fun play(fd: FileDescriptor) {
+        if (!hasSurface()) return
+        releaseResources()
 
         try {
-            val pExtractor = MediaExtractor()
-            try {
-                pExtractor.setDataSource(fd)
-                android.util.Log.e("MX-VIDEO", "MediaExtractor setDataSource OK")
-            } catch (e: Exception) {
-                android.util.Log.e("MX-VIDEO", "Extractor FAILED", e)
-                return
-            }
-            extractor = pExtractor
+            extractor = MediaExtractor().apply { setDataSource(fd) }
 
-            var trackIndex: Int? = null
+            var trackIndex = -1
             for (i in 0 until extractor!!.trackCount) {
                 val format = extractor!!.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME)
-                android.util.Log.e("MX-VIDEO", "Track $i mime=$mime")
-                if (mime?.startsWith("video/") == true) {
+                if (format.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true) {
                     trackIndex = i
                     break
                 }
             }
 
-            if (trackIndex == null) {
-                android.util.Log.e("MX-VIDEO", "NO VIDEO TRACK FOUND")
-                return
-            }
+            if (trackIndex < 0) return
 
             extractor!!.selectTrack(trackIndex)
             val format = extractor!!.getTrackFormat(trackIndex)
-            android.util.Log.e("MX-VIDEO", "Creating codec for ${format.getString(MediaFormat.KEY_MIME)}")
 
-            // Sync Extractor logic (Keep this!)
-            val masterUs = NativePlayer.virtualClockUs()
-            if (masterUs > 0) {
-                extractor!!.seekTo(masterUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-            } else {
-                extractor!!.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            val startUs = NativePlayer.virtualClockUs()
+            // Sync extractor initially under lock
+            synchronized(extractorLock) {
+                extractor!!.seekTo(startUs.coerceAtLeast(0), MediaExtractor.SEEK_TO_CLOSEST_SYNC)
             }
 
             durationMs = if (format.containsKey(MediaFormat.KEY_DURATION))
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
             else 0
 
-            codec = MediaCodec.createDecoderByType(
-                format.getString(MediaFormat.KEY_MIME)!!
-            ).apply {
+            codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!).apply {
                 configure(format, surface, null, 0)
                 start()
             }
 
             inputEOS = false
-            lastRenderedPtsUs = Long.MIN_VALUE
-            renderEnabled = true
+            lastRenderedPtsUs = Long.MIN_VALUE // Trigger First Frame logic
+            
+            // Start Paused. Let Controller call resume.
+            decodeEnabled = false
+            renderEnabled = false
 
             startDecodeLoop()
 
         } catch (e: Exception) {
             e.printStackTrace()
-            release()
+            releaseResources()
         }
     }
 
-    // ✅ NEW: accept a Uri; open PFD via context and delegate to fd-based play
     override fun play(uri: Uri) {
         release()
-
         try {
-            // Close any existing PFD we own before opening a new one
-            try { currentPfd?.close() } catch (_: Exception) {}
-            currentPfd = null
-
-            val pfd: ParcelFileDescriptor =
-                context.contentResolver.openFileDescriptor(uri, "r") ?: return
-
-            // Delegate to the real implementation
-            play(pfd.fileDescriptor)
-
-            // Store so we can close on release()
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return
             currentPfd = pfd
-
+            play(pfd.fileDescriptor)
         } catch (e: Exception) {
             e.printStackTrace()
             release()
@@ -271,124 +248,104 @@ class MediaCodecEngine(
     }
 
     override fun pause() {
-        // SOFT PAUSE: stop decoding/rendering but keep thread alive
         renderEnabled = false
         decodeEnabled = false
-        // do NOT set videoRunning=false or join thread
     }
 
     override fun resume() {
         decodeEnabled = true
         renderEnabled = true
-        // handled by PlayerController via renderEnabled & prepareResume
     }
 
     override fun seekTo(positionMs: Long) {
-        val positionUs = positionMs * 1000
-        
-        // 🔒 HARD SEEK: Stop decode thread completely to prevent extractor conflict
+        val positionUs = positionMs * 1000L
+
+        // Hard seek: Kill thread
         videoRunning = false
-        try {
-            decodeThread?.join()
-        } catch (_: InterruptedException) {}
+        try { decodeThread?.join() } catch (_: Exception) {}
         decodeThread = null
+
+        try { codec?.flush() } catch (_: Exception) {}
         
-        // Flush decoder
-        try {
-            codec?.flush()
-        } catch (_: Exception) {}
-        
-        // Seek Extractor to explicit target
-        extractor?.seekTo(
-            positionUs.coerceAtLeast(0),
-            MediaExtractor.SEEK_TO_CLOSEST_SYNC
-        )
-        
+        synchronized(extractorLock) {
+            extractor?.seekTo(positionUs.coerceAtLeast(0), MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        }
+
         lastRenderedPtsUs = Long.MIN_VALUE
-        
-        // Restart decode thread
         startDecodeLoop()
     }
 
-    // Legacy method - preserved for compatibility but deprecated
-    @Deprecated("Use seekTo(positionMs) with explicit target instead")
-    fun seekToAudioClock() {
-        // Read current clock position
-        val clockUs = NativePlayer.virtualClockUs()
-        seekTo(clockUs / 1000)
+    // 🔒 FIX: RACE-PROOF SEEK PREVIEW
+    // Temporarily gates decode and uses lock to ensure safe atomic Preview
+    override fun onSeekPreview(positionMs: Long) {
+        if (!videoRunning) return
+
+        // 1. Logic freeze
+        val wasDecoding = decodeEnabled
+        decodeEnabled = false
+
+        val positionUs = positionMs * 1000L
+        
+        synchronized(extractorLock) {
+            try {
+                // 2. Hardware reset
+                codec?.flush()
+                extractor?.seekTo(positionUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                
+                // 3. Re-arm trigger (MIN_VALUE overrides the !decodeEnabled gate for ONE frame)
+                lastRenderedPtsUs = Long.MIN_VALUE
+            } catch (_: Exception) {}
+        }
+        
+        // 4. Restore state
+        // If we were paused, this keeps decodeEnabled=false, but MIN_VALUE allows 1 frame.
+        // If we were playing, this resumes play logic (though typically we pause before preview).
+        decodeEnabled = wasDecoding
     }
 
-    // Prepare internal renderer state before resuming audio clock
-    fun prepareResume() {
-        lastRenderedPtsUs = Long.MIN_VALUE
-        renderEnabled = true
-        decodeEnabled = true
-    }
-
-    // Detach surface without stopping audio or destroying the engine's PFD
     override fun detachSurface() {
-        // Stop rendering and clear the surface reference
         renderEnabled = false
         surface = null
-
-        // Stop the decode loop but keep extractor and PFD so we can recreate quickly
         videoRunning = false
-        try {
-            decodeThread?.join()
-        } catch (_: InterruptedException) {
-        }
+        try { decodeThread?.join() } catch (_: Exception) {}
         decodeThread = null
     }
 
-    // Recreate the video pipeline only - do NOT restart audio
     override fun recreateVideo() {
         if (videoRunning) return
-
-        // Release codec and extractor resources only
-        try { codec?.stop() } catch (_: Exception) {}
-        try { codec?.release() } catch (_: Exception) {}
+        try { codec?.stop(); codec?.release() } catch (_: Exception) {}
         codec = null
         try { extractor?.release() } catch (_: Exception) {}
         extractor = null
 
-        // If we own a PFD (opened via play(uri)), reuse it; otherwise nothing to do
-        val pfdLocal = currentPfd
-        if (pfdLocal != null && hasSurface()) {
-            // This will re-open extractor/codec and start the decode loop
-            play(pfdLocal.fileDescriptor)
+        currentPfd?.fileDescriptor?.let { fd ->
+            if (hasSurface()) play(fd)
         }
     }
 
     override fun release() {
-        videoRunning = false
-        renderEnabled = false
-
-        try {
-            decodeThread?.join()
-        } catch (_: InterruptedException) {
-        }
-        decodeThread = null
-
-        try {
-            codec?.stop()
-            codec?.release()
-            extractor?.release()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            codec = null
-            extractor = null
-        }
-
-        try {
-            currentPfd?.close()
-        } catch (_: Exception) {
-        }
+        releaseResources()
+        try { currentPfd?.close() } catch (_: Exception) {}
         currentPfd = null
-        durationMs = 0
     }
 
+    private fun releaseResources() {
+        videoRunning = false
+        renderEnabled = false
+        
+        try { decodeThread?.join() } catch (_: Exception) {}
+        decodeThread = null
+
+        try { codec?.stop(); codec?.release() } catch (_: Exception) {}
+        codec = null
+        
+        try { extractor?.release() } catch (_: Exception) {}
+        extractor = null
+    }
+
+    // Unused / Deprecated
     override fun onSeekStart() { }
-    override fun onSeekPreview(positionMs: Long) { }
     override fun onSeekCommit(positionMs: Long) { }
+    @Deprecated("Use seekTo(positionMs)")
+    fun seekToAudioClock() { }
 }

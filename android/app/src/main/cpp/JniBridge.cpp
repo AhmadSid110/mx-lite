@@ -87,8 +87,10 @@ Java_com_mxlite_app_player_NativePlayer_nativeSeek(JNIEnv *, jobject,
   // ALWAYS update backing clock explicitly to ensure sync
   // This prevents video freeze if AudioEngine fails to propagate the seek
   gVirtualClock.seekUs((int64_t)posUs);
-  // 🔴 FIX #3: Resume clock after seek
-  gVirtualClock.resume();
+
+  // ❌ REMOVED: Do NOT auto-resume clock.
+  // The UI Controller is now responsible for maintaining pause state.
+  // gVirtualClock.resume();
 }
 
 extern "C" JNIEXPORT void JNICALL
