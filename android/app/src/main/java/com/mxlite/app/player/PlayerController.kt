@@ -54,8 +54,8 @@ class PlayerController(
     // =========================================================================
 
     override fun play(uri: Uri) {
-        // 1. Clean slate
-        release()
+        // 1. Clean slate - Rule S3: MUST NOT call release()
+        stop()
         
         playbackState = PlaybackState.STOPPED
         currentUri = uri

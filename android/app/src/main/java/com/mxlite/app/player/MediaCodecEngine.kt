@@ -64,12 +64,12 @@ class MediaCodecEngine(
     // 🟢 CORE SYNC LOGIC
     // =========================================================================
     private fun handleVideoFrame(outIndex: Int, info: MediaCodec.BufferInfo) {
-        val index = outIndex
+        val localCodec = codec ?: return // Should not happen if called from decodeLoop
         
         // 🔒 PHASE 2: SURFACE VALIDITY AT RENDER TIME
         if (surface == null || !surface!!.isValid) {
             try {
-                codec?.releaseOutputBuffer(index, false)
+                localCodec.releaseOutputBuffer(outIndex, false)
             } catch (_: Exception) {}
             return
         }
@@ -78,7 +78,7 @@ class MediaCodecEngine(
         // Allows the preview frame to show even if "Paused"
         if (lastRenderedPtsUs == Long.MIN_VALUE) {
             try {
-                codec?.releaseOutputBuffer(index, true)
+                localCodec.releaseOutputBuffer(outIndex, true)
                 lastRenderedPtsUs = info.presentationTimeUs
             } catch (e: Exception) { e.printStackTrace() }
             return
@@ -87,7 +87,7 @@ class MediaCodecEngine(
         // 2️⃣ RULE: PAUSE → DROP (DEADLOCK PREVENTION)
         // If render is disabled, drop immediately. NEVER hold the buffer.
         if (!renderEnabled) {
-            try { codec?.releaseOutputBuffer(index, false) } catch (_: Exception) {}
+            try { localCodec.releaseOutputBuffer(outIndex, false) } catch (_: Exception) {}
             return
         }
 
@@ -99,20 +99,19 @@ class MediaCodecEngine(
         while (diffUs > 0 && videoRunning) {
             // Check state integrity (User might have paused during sleep)
             if (!renderEnabled) {
-                try { codec?.releaseOutputBuffer(index, false) } catch (_: Exception) {}
+                try { localCodec.releaseOutputBuffer(outIndex, false) } catch (_: Exception) {}
                 return
             }
 
-            // Sleep calculation:
-            // - If >20ms away, sleep conservative amount (diff - 10ms) to avoid JNI thrashing
-            // - If <20ms away, sleep small (2ms) for precision
-            // Cap max sleep to 50ms for responsiveness
             val sleepMs = when {
                 diffUs > 20_000 -> min((diffUs / 1000) - 10, 50)
                 else -> 2
             }
             
-            try { Thread.sleep(sleepMs) } catch (e: InterruptedException) { return }
+            try { Thread.sleep(sleepMs) } catch (e: InterruptedException) {
+                try { localCodec.releaseOutputBuffer(outIndex, false) } catch (_: Exception) {}
+                return
+            }
             
             // Re-read clock only after wake-up
             clockUs = NativePlayer.virtualClockUs()
@@ -121,14 +120,13 @@ class MediaCodecEngine(
 
         // 4️⃣ RULE: DROP LATE FRAMES (>50ms behind)
         if (diffUs < -50_000) {
-            try { codec?.releaseOutputBuffer(index, false) } catch (_: Exception) {}
+            try { localCodec.releaseOutputBuffer(outIndex, false) } catch (_: Exception) {}
             return
         }
 
         // 5️⃣ RULE: RENDER
-        val localCodec = codec ?: return
         try {
-            localCodec.releaseOutputBuffer(index, true)
+            localCodec.releaseOutputBuffer(outIndex, true)
             lastRenderedPtsUs = info.presentationTimeUs
         } catch (_: UnsupportedOperationException) {
             videoRunning = false
@@ -257,9 +255,17 @@ class MediaCodecEngine(
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
             else 0
 
+            // Rule C1: Surface must exist before configure
+            check(surface != null && surface!!.isValid) {
+                "MediaCodec configured without a valid Surface"
+            }
+
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!).apply {
                 configure(format, surface, null, 0)
                 start()
+                
+                // Rule C3: setVideoScalingMode is mandatory
+                setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
                 
                 // 🕵️ RULE 8: Verify Color Format is Surface-compatible
                 val colorFormat = outputFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT)
@@ -324,10 +330,18 @@ class MediaCodecEngine(
         // Recreate codec
         if (extractor != null && videoTrackIndex >= 0) {
             try {
+                // Rule C1: Surface must exist before configure
+                check(surface != null && surface!!.isValid) {
+                    "MediaCodec configured without a valid Surface in seekTo"
+                }
+
                 val format = extractor!!.getTrackFormat(videoTrackIndex)
                 codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!).apply {
                     configure(format, surface, null, 0)
                     start()
+
+                    // Rule C3: setVideoScalingMode is mandatory
+                    setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
                 }
             } catch (e: Exception) {
                 Log.e("MediaCodecEngine", "Failed to recreate codec in seekTo", e)
