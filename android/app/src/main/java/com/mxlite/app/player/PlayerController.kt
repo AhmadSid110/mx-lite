@@ -49,6 +49,12 @@ class PlayerController(
     override val isPlaying: Boolean
         get() = playbackState == PlaybackState.PLAYING
 
+    override val videoWidth: Int
+        get() = video.videoWidth
+
+    override val videoHeight: Int
+        get() = video.videoHeight
+
     // =========================================================================
     // 🟢 PUBLIC ENTRY POINTS
     // =========================================================================

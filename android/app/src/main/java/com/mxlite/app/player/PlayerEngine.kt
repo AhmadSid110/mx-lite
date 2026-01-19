@@ -9,6 +9,8 @@ interface PlayerEngine {
     val durationMs: Long
     val currentPositionMs: Long
     val isPlaying: Boolean
+    val videoWidth: Int
+    val videoHeight: Int
 
     fun play(uri: Uri)
     fun pause()

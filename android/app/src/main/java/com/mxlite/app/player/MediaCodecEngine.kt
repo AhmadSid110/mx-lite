@@ -53,6 +53,11 @@ class MediaCodecEngine(
     override val isPlaying: Boolean
         get() = decodeEnabled && renderEnabled && videoRunning
 
+    override var videoWidth: Int = 0
+        private set
+    override var videoHeight: Int = 0
+        private set
+
     override fun attachSurface(surface: Surface) {
         this.surface = surface
         surfaceReady = true
@@ -269,6 +274,10 @@ class MediaCodecEngine(
                 // 🕵️ RULE 8: Verify Color Format is Surface-compatible
                 val colorFormat = outputFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT)
                 Log.d("MediaCodecEngine", "RULE 8: Decoder started with ColorFormat=$colorFormat")
+                
+                // Expose Dimensions
+                videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
+                videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
             }
 
             inputEOS = false
@@ -341,6 +350,9 @@ class MediaCodecEngine(
 
                     // Rule C3: setVideoScalingMode is mandatory
                     setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+                    
+                    videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
+                    videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
                 }
             } catch (e: Exception) {
                 Log.e("MediaCodecEngine", "Failed to recreate codec in seekTo", e)
