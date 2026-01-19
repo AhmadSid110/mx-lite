@@ -73,3 +73,11 @@ No reverse calls are allowed.
 - [ ] Surface is not cleared on `play(uri)`.
 - [ ] `nativeSeek()` does not trigger state changes (resume/pause).
 - [ ] VirtualClock is paused during seek-drag.
+
+## Final Invariants (Surface Safety)
+
+1. **Surface is NEVER cleared during playback resets**. Only in `release()`.
+2. **`play(uri)` MUST NOT call `release()`**. It must call a reset function that preserves the surface (e.g., `stop()` or `resetPlaybackStateOnly()`).
+3. **`MediaCodec.configure()` MUST assert surface validity**. Use `check(surface != null)` to crash early instead of silent black hole.
+4. **One Surface instance per TextureView lifecycle**. Cache and reuse the surface to prevent "black flicker" on rotation or track change.
+5. **"No Surface" must be impossible during PLAYING**.

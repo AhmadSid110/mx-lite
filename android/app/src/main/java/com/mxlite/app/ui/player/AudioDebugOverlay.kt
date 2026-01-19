@@ -9,14 +9,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import com.mxlite.app.player.NativeAudioDebug
+import com.mxlite.app.player.PlayerEngine
 
 @Composable
-fun AudioDebugOverlay(modifier: Modifier = Modifier) {
+fun AudioDebugOverlay(
+    engine: PlayerEngine,
+    hasSurface: Boolean,
+    modifier: Modifier = Modifier
+) {
     var text by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         while (true) {
-            text = NativeAudioDebug.snapshot()
+            text = NativeAudioDebug.snapshot(engine, hasSurface)
             delay(500)
         }
     }

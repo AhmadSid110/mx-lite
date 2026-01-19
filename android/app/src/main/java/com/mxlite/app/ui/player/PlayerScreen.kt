@@ -279,7 +279,11 @@ fun PlayerScreen(
         }
 
         // 5. DEBUG / AUDIO OVERLAY 
-        AudioDebugOverlay(modifier = Modifier.align(Alignment.TopStart).padding(16.dp))
+        AudioDebugOverlay(
+            engine = engine,
+            hasSurface = managedSurface != null && managedSurface!!.isValid,
+            modifier = Modifier.align(Alignment.TopStart).padding(16.dp)
+        )
 
         // 6. CONTROL BARS
         AnimatedVisibility(

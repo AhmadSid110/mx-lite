@@ -255,10 +255,9 @@ class MediaCodecEngine(
                 format.getLong(MediaFormat.KEY_DURATION) / 1000
             else 0
 
-            // Rule C1: Surface must exist before configure
-            check(surface != null && surface!!.isValid) {
-                "MediaCodec configured without a valid Surface"
-            }
+            // Rule 3: MediaCodec.configure() MUST see a valid Surface
+            check(surface != null) { "Surface lost before configure()" }
+            check(surface!!.isValid) { "Surface invalid before configure()" }
 
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!).apply {
                 configure(format, surface, null, 0)
@@ -288,14 +287,15 @@ class MediaCodecEngine(
     }
 
     override fun play(uri: Uri) {
-        release()
+        // Rule S3: MUST NOT call release() which clears surface
+        stop()
         try {
             val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return
             currentPfd = pfd
             play(pfd.fileDescriptor)
         } catch (e: Exception) {
             e.printStackTrace()
-            release()
+            stop()
         }
     }
 
@@ -330,10 +330,9 @@ class MediaCodecEngine(
         // Recreate codec
         if (extractor != null && videoTrackIndex >= 0) {
             try {
-                // Rule C1: Surface must exist before configure
-                check(surface != null && surface!!.isValid) {
-                    "MediaCodec configured without a valid Surface in seekTo"
-                }
+                // Rule 3: MediaCodec.configure() MUST see a valid Surface
+                check(surface != null) { "Surface lost before configure() in seekTo" }
+                check(surface!!.isValid) { "Surface invalid before configure() in seekTo" }
 
                 val format = extractor!!.getTrackFormat(videoTrackIndex)
                 codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!).apply {
