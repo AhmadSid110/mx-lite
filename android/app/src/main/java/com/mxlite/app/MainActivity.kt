@@ -11,7 +11,9 @@ import com.mxlite.app.ui.AppRoot
 import com.mxlite.app.ui.PermissionWaitingScreen
 import com.mxlite.app.ui.theme.MxLiteTheme
 import com.mxlite.app.debug.CrashHandler
+import androidx.compose.material3.ExperimentalMaterial3Api
 
+@ExperimentalMaterial3Api
 class MainActivity : ComponentActivity() {
 
     private var permissionGranted by mutableStateOf(false)

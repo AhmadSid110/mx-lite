@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun AppRoot() {
     val context = LocalContext.current

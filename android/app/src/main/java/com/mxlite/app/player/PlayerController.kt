@@ -55,6 +55,15 @@ class PlayerController(
     override val videoHeight: Int
         get() = video.videoHeight
 
+    override val decoderName: String
+        get() = video.decoderName
+        
+    override val outputFps: Float
+        get() = video.outputFps
+        
+    override val droppedFrames: Int
+        get() = video.droppedFrames
+
     // =========================================================================
     // 🟢 PUBLIC ENTRY POINTS
     // =========================================================================

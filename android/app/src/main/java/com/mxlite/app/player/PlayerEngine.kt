@@ -11,6 +11,9 @@ interface PlayerEngine {
     val isPlaying: Boolean
     val videoWidth: Int
     val videoHeight: Int
+    val decoderName: String
+    val outputFps: Float
+    val droppedFrames: Int
 
     fun play(uri: Uri)
     fun pause()

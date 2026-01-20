@@ -57,6 +57,17 @@ class MediaCodecEngine(
         private set
     override var videoHeight: Int = 0
         private set
+        
+    override var decoderName: String = "Unknown"
+        private set
+    override var outputFps: Float = 0f
+        private set
+    override var droppedFrames: Int = 0
+        private set
+
+    // FPS Counter
+    private var frameCount = 0
+    private var lastFpsTime = 0L
 
     override fun attachSurface(surface: Surface) {
         this.surface = surface
@@ -125,14 +136,28 @@ class MediaCodecEngine(
 
         // 4️⃣ RULE: DROP LATE FRAMES (>50ms behind)
         if (diffUs < -50_000) {
-            try { localCodec.releaseOutputBuffer(outIndex, false) } catch (_: Exception) {}
+            try { 
+                localCodec.releaseOutputBuffer(outIndex, false)
+                droppedFrames++
+            } catch (_: Exception) {}
             return
         }
+
 
         // 5️⃣ RULE: RENDER
         try {
             localCodec.releaseOutputBuffer(outIndex, true)
             lastRenderedPtsUs = info.presentationTimeUs
+            
+            // FPS Calculation
+            frameCount++
+            val now = System.currentTimeMillis()
+            if (now - lastFpsTime >= 1000) {
+                outputFps = frameCount.toFloat()
+                frameCount = 0
+                lastFpsTime = now
+            }
+            
         } catch (_: UnsupportedOperationException) {
             videoRunning = false
         } catch (e: Exception) { e.printStackTrace() }
@@ -278,6 +303,10 @@ class MediaCodecEngine(
                 // Expose Dimensions
                 videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
                 videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+                
+                try {
+                    decoderName = codec?.name ?: "Unknown"
+                } catch(_: Exception) {}
             }
 
             inputEOS = false
