@@ -20,6 +20,9 @@ class PlayerController(
     private var videoDecoder: VideoDecoder? = null
     private var currentSurface: Surface? = null
     
+    // 🧪 DEVELOPER TOGGLE
+    private var useHwDecoder = true
+    
     // Audio FD management
     private var audioPfd: ParcelFileDescriptor? = null
     private var hasAudio = false
@@ -91,29 +94,7 @@ class PlayerController(
             hasAudio = NativePlayer.dbgHasAudioTrack()
             
             // 4. Start Video Engine
-            val surface = currentSurface
-            if (surface != null && surface.isValid) {
-                // TEMPORARY: Switch for Phase 2.1
-                val useHwDecoder = true
-                
-                val decoder: VideoDecoder = if (useHwDecoder) {
-                    HwVideoDecoder(context, masterClock)
-                } else {
-                    com.mxlite.player.decoder.sw.SwVideoDecoder()
-                }
-                
-                videoDecoder = decoder
-                decoder.prepare(pfd.fileDescriptor, surface)
-                
-                // 🔒 CRITICAL FIX: INITIAL HANDSHAKE
-                // START CLOCK FIRST
-                NativePlayer.nativeResume()
-                // THEN open video gates
-                decoder.play()
-            } else {
-                Log.w("PlayerController", "play() called without surface")
-                NativePlayer.nativeResume()
-            }
+            initVideoDecoder()
             
             playbackState = PlaybackState.PLAYING
 
@@ -227,7 +208,47 @@ class PlayerController(
 
     override fun recreateVideo() {
         if (currentUri == null) return
-        videoDecoder?.recreateVideo()
+        initVideoDecoder()
+    }
+
+    override fun switchDecoder() {
+        useHwDecoder = !useHwDecoder
+        Log.d("PlayerController", "Switching to ${if(useHwDecoder) "Hardware" else "Software"} decoder")
+        recreateVideo()
+    }
+
+    private fun initVideoDecoder() {
+        val surface = currentSurface
+        val pfd = audioPfd
+        val uri = currentUri
+
+        if (surface != null && surface.isValid && pfd != null && uri != null) {
+            val lastPos = currentPositionMs
+            
+            videoDecoder?.stop()
+            videoDecoder?.release()
+
+            val decoder: VideoDecoder = if (useHwDecoder) {
+                HwVideoDecoder(context, masterClock)
+            } else {
+                com.mxlite.player.decoder.sw.SwVideoDecoder()
+            }
+            
+            videoDecoder = decoder
+            decoder.prepare(pfd.fileDescriptor, surface)
+            
+            if (lastPos > 0) {
+                decoder.seekTo(lastPos)
+            }
+
+            NativePlayer.nativeResume()
+            
+            if (playbackState == PlaybackState.PLAYING || playbackState == PlaybackState.STOPPED) {
+                decoder.play()
+            }
+        } else {
+            NativePlayer.nativeResume()
+        }
     }
 
     override fun release() {

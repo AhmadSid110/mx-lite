@@ -32,4 +32,7 @@ interface PlayerEngine {
     fun onSeekStart()
     fun onSeekPreview(positionMs: Long)
     fun onSeekCommit(positionMs: Long)
+
+    // 🧪 DEVELOPER TOOLS
+    fun switchDecoder()
 }

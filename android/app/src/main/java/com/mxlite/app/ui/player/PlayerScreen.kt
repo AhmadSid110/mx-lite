@@ -450,18 +450,32 @@ fun PlayerScreen(
                 }
             }
         )
-
         // [2] GESTURE LAYER
         Box(
             modifier = Modifier.fillMaxSize()
                 .pointerInput(isLocked) {
                     if (isLocked) return@pointerInput
+                    var tapCount = 0
+                    var lastTapTime = 0L
                     detectTapGestures(
                         onTap = { 
-                            lastInteractionTime = System.currentTimeMillis()
-                            controlsVisible = !controlsVisible
-                            if (!controlsVisible) { showSettings = false; showDiagnostics = false }
-                            focusManager.clearFocus() 
+                            val now = System.currentTimeMillis()
+                            if (now - lastTapTime < 300) {
+                                tapCount++
+                            } else {
+                                tapCount = 1
+                            }
+                            lastTapTime = now
+
+                            if (tapCount == 3) {
+                                engine.switchDecoder()
+                                tapCount = 0
+                            } else {
+                                lastInteractionTime = System.currentTimeMillis()
+                                controlsVisible = !controlsVisible
+                                if (!controlsVisible) { showSettings = false; showDiagnostics = false }
+                                focusManager.clearFocus() 
+                            }
                         },
                         onDoubleTap = { /* Seek feedback */ }
                     )
@@ -744,7 +758,10 @@ fun PlayerScreen(
                     Text("Diagnostics", style=MaterialTheme.typography.titleLarge, color=Color.White)
                     HorizontalDivider(color=Color.White.copy(0.2f))
                     DiagnosticItem("Resolution", "${videoWidth}x${videoHeight} (${getResolutionLabel(videoHeight)})")
-                    DiagnosticItem("Decoder", decoderName)
+                    Row(Modifier.fillMaxWidth().clickable { engine.switchDecoder() }, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Decoder", color = Color.LightGray)
+                        Text(decoderName, color = Color.White, fontWeight = FontWeight.Bold)
+                    }
                     DiagnosticItem("Type", if(decoderName.startsWith("c2.android")) "Software" else "Hardware")
                     DiagnosticItem("FPS", String.format("%.1f", outputFps))
                     DiagnosticItem("Drops", droppedFrames.toString())
