@@ -21,12 +21,15 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,8 +38,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -48,7 +53,6 @@ import com.mxlite.app.player.PlayerEngine
 import com.mxlite.app.player.NativePlayer
 import com.mxlite.app.subtitle.SubtitleController
 import com.mxlite.app.subtitle.SubtitleCue
-import com.mxlite.app.subtitle.SubtitlePrefsStore
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.abs
@@ -68,7 +72,70 @@ private val ScrimTop = Brush.verticalGradient(listOf(Color.Black.copy(alpha=0.6f
 private val ScrimBottom = Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha=0.7f)))
 
 enum class OrientationMode { AUTO, PORTRAIT, LANDSCAPE }
-enum class AspectMode { FIT, FILL, CROP, ORIGINAL, CUSTOM }
+
+// 📐 CANONICAL ASPECT RATIO INTERFACE
+sealed interface AspectRatio {
+    val label: String
+    data object Fit : AspectRatio { override val label = "Fit" }
+    data object Fill : AspectRatio { override val label = "Fill" }
+    data object Crop : AspectRatio { override val label = "Crop" }
+    data object Original : AspectRatio { override val label = "Original" }
+    data object Stretch : AspectRatio { override val label = "Stretch" }
+    data class Custom(val w: Float, val h: Float) : AspectRatio {
+        override val label = if (h == 1f) "$w" else "${w.toInt()}:${h.toInt()}"
+        companion object {
+            val SixteenNine = Custom(16f, 9f)
+            val FourThree = Custom(4f, 3f)
+            val TwentyOneNine = Custom(21f, 9f)
+        }
+    }
+}
+
+fun parseAspectRatio(input: String): AspectRatio {
+    val raw = input.trim().lowercase()
+    return when(raw) {
+        "fit" -> AspectRatio.Fit
+        "fill" -> AspectRatio.Fill
+        "crop" -> AspectRatio.Crop
+        "original", "orig" -> AspectRatio.Original
+        "stretch" -> AspectRatio.Stretch
+        "auto" -> AspectRatio.Fit
+        else -> {
+            // 1. Colon (16:9)
+            if (raw.contains(":")) {
+                val parts = raw.split(":")
+                if (parts.size == 2) {
+                    val w = parts[0].toFloatOrNull()
+                    val h = parts[1].toFloatOrNull()
+                    if (w != null && h != null && h != 0f) return AspectRatio.Custom(w, h)
+                }
+            }
+            // 2. Resolution (1920x1080)
+            if (raw.contains("x")) {
+                val parts = raw.split("x")
+                if (parts.size == 2) {
+                    val w = parts[0].toFloatOrNull()
+                    val h = parts[1].toFloatOrNull()
+                    if (w != null && h != null && h != 0f) return AspectRatio.Custom(w, h)
+                }
+            }
+            // 3. Fraction (21/9)
+            if (raw.contains("/")) {
+                val parts = raw.split("/")
+                if (parts.size == 2) {
+                    val w = parts[0].toFloatOrNull()
+                    val h = parts[1].toFloatOrNull()
+                    if (w != null && h != null && h != 0f) return AspectRatio.Custom(w, h)
+                }
+            }
+            // 4. Decimal (2.35)
+            val f = raw.toFloatOrNull()
+            if (f != null) return AspectRatio.Custom(f, 1f)
+            
+            AspectRatio.Fit // Default fallback
+        }
+    }
+}
 
 // ============================================================================================
 // MAIN SCREEN
@@ -85,6 +152,7 @@ fun PlayerScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     val audioManager = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager }
+    val focusManager = LocalFocusManager.current
 
     // Surface & Texture
     var managedSurface by remember { mutableStateOf<android.view.Surface?>(null) }
@@ -113,9 +181,25 @@ fun PlayerScreen(
 
     // User Overrides
     var orientationMode by remember { mutableStateOf(OrientationMode.AUTO) }
-    var aspectMode by remember { mutableStateOf(AspectMode.FIT) }
-    var customAspectX by remember { mutableStateOf(21f) }
-    var customAspectY by remember { mutableStateOf(9f) }
+    
+    // 1️⃣ ASPECT RATIO STATE (UI STATE)
+    val aspectRatioSaver = remember {
+        androidx.compose.runtime.saveable.Saver<AspectRatio, String>(
+            save = { 
+                when(it) {
+                    AspectRatio.Fit -> "fit"
+                    AspectRatio.Fill -> "fill"
+                    AspectRatio.Crop -> "crop"
+                    AspectRatio.Original -> "original"
+                    AspectRatio.Stretch -> "stretch"
+                    is AspectRatio.Custom -> "custom:${it.w}:${it.h}"
+                }
+            },
+            restore = { parseAspectRatio(it) }
+        )
+    }
+    var aspectRatio by rememberSaveable(stateSaver = aspectRatioSaver) { mutableStateOf<AspectRatio>(AspectRatio.Fit) }
+    var customAspectInput by remember { mutableStateOf("") }
 
     // Gestures
     var isDragging by remember { mutableStateOf(false) }
@@ -194,49 +278,146 @@ fun PlayerScreen(
         }
     }
 
-    // UPDATE TEXTURE
-    fun updateTexture() {
+    // 2️⃣ APPLY TRANSFORM IMMEDIATELY (STRICT ARCHITECTURE)
+    fun applyAspectRatio() {
         val tv = textureView ?: return
         val viewW = tv.width
         val viewH = tv.height
-        if (videoWidth <= 0 || videoHeight <= 0 || viewW <= 0 || viewH <= 0) return
+        
+        // 4️⃣ MANDATORY CHECKS
+        if (viewW <= 0 || viewH <= 0) return
+        
+        // Fallback safety for unknown video size
+        val safeW = if (videoWidth > 0) videoWidth.toFloat() else viewW.toFloat()
+        val safeH = if (videoHeight > 0) videoHeight.toFloat() else viewH.toFloat()
 
         val matrix = Matrix()
         val viewRatio = viewW.toFloat() / viewH
-        val videoRatio = if (aspectMode == AspectMode.CUSTOM) customAspectX / customAspectY else videoWidth.toFloat() / videoHeight
-
+        val sourceRatio = safeW / safeH
+        
         var scaleX = 1f
         var scaleY = 1f
-
-        when (aspectMode) {
-            AspectMode.FIT -> { }
-            AspectMode.FILL, AspectMode.CROP -> {
-                if (viewRatio > videoRatio) scaleY = (viewW / videoRatio) / viewH
-                else scaleX = (viewH * videoRatio) / viewW
+        
+        // 6️⃣ LOGIC: GPU Operations only. No isPlaying checks.
+        when (val ar = aspectRatio) {
+            AspectRatio.Fit -> {
+                // Letterbox / Pillarbox
+                if (viewRatio > sourceRatio) { // View wider than video
+                    scaleX = (safeW * viewH) / (safeH * viewW)
+                    scaleY = 1f
+                } else { // View taller than video
+                    scaleX = 1f
+                    scaleY = (safeH * viewW) / (safeW * viewH)
+                }
             }
-            AspectMode.ORIGINAL -> {
-                scaleX = videoWidth.toFloat() / viewW
-                scaleY = videoHeight.toFloat() / viewH
+            AspectRatio.Fill, AspectRatio.Crop -> {
+                // Zoom to Fill
+                if (viewRatio > sourceRatio) {
+                     scaleX = 1f
+                     scaleY = (viewW / sourceRatio) / viewH
+                } else {
+                     scaleX = (viewH * sourceRatio) / viewW
+                     scaleY = 1f
+                }
             }
-            AspectMode.CUSTOM -> {
-                if (viewRatio > videoRatio) scaleX = (viewH * videoRatio) / viewW
-                else scaleY = (viewW / videoRatio) / viewH
+            AspectRatio.Stretch -> {
+                // Match View Bounds exactly (Distort)
+                scaleX = 1f
+                scaleY = 1f
+            }
+            AspectRatio.Original -> {
+                 // Map safeW/safeH to View pixels (1:1 if we consider safeW as pixels, but logic here is Aspect based)
+                 // User intent: "Aspect Ratio Original" usually means "Fit while respecting Source AR".
+                 // MX Player "100%" implies 1:1 pixels. "Original" implies SAR.
+                 // We implement canonical "Fit with Source AR" (Same as Fit, but semantic difference for user)
+                 if (viewRatio > sourceRatio) {
+                    scaleX = (safeW * viewH) / (safeH * viewW)
+                    scaleY = 1f
+                } else {
+                    scaleX = 1f
+                    scaleY = (safeH * viewW) / (safeW * viewH)
+                }
+            }
+            is AspectRatio.Custom -> {
+                // Force specific ratio (Anamorphic / Correction)
+                // Treat ar.w / ar.h as the TRUE content ratio
+                val targetRatio = ar.w / ar.h
+                if (viewRatio > targetRatio) {
+                    // View wider than target -> Pillarbox
+                    scaleX = (viewH * targetRatio) / viewW
+                    scaleY = 1f
+                } else {
+                    scaleX = 1f
+                    scaleY = (viewW / targetRatio) / viewH
+                }
             }
         }
+        
+        // TextureView Default scales to fit video buffer to view. 
+        // We override with Matrix.
+        // Important: TextureView documentation says setTransform is relative to the view's bounds.
+        // For 'Fit' logic derived above (scaling down to fit), we need to ensure we start from 'Fill' or 'Fit'?
+        // Actually, the simplest math is: 
+        // 1. Calculate factor to match width (scaleX) and height (scaleY)
+        // 2. Center pivot.
+        
+        // Re-evaluating standard math:
+        // By default TextureView stretches video to View Size? No, it respects Surface aspect?
+        // AndroidView + TextureView usually stretches content to View bounds unless configured.
+        // So scaleX=1, scaleY=1 makes it STRETCH.
+        
+        // Let's refine for "Stretch" Base:
+        // Fit Logic above assumes we are correcting a Stretched image.
+        // Check: if scaleX = sourceRatio / viewRatio.
+        // If view=16:9 (1.77), video=4:3 (1.33). source/view = 0.75. 
+        // width = 0.75 * viewWidth. Correct for pillarbox.
+        
+        // Override above calculations for correctness based on Stretch Base:
+        if (aspectRatio is AspectRatio.Fit || aspectRatio is AspectRatio.Original) {
+             if (viewRatio > sourceRatio) {
+                 scaleX = sourceRatio / viewRatio
+                 scaleY = 1f
+             } else {
+                 scaleX = 1f
+                 scaleY = viewRatio / sourceRatio
+             }
+        } else if (aspectRatio is AspectRatio.Fill || aspectRatio is AspectRatio.Crop) {
+             if (viewRatio > sourceRatio) {
+                 scaleX = 1f
+                 scaleY = viewRatio / sourceRatio
+             } else {
+                 scaleX = sourceRatio / viewRatio
+                 scaleY = 1f
+             }
+        } else if (aspectRatio is AspectRatio.Custom) {
+            val targetRatio = (aspectRatio as AspectRatio.Custom).w / (aspectRatio as AspectRatio.Custom).h
+            // We want the Visible Image to have `targetRatio`.
+            // We start with Stretched Image (Ratio = viewRatio).
+            // We want Final Ratio = targetRatio.
+            // Factor = targetRatio / viewRatio.
+             if (viewRatio > targetRatio) {
+                 scaleX = targetRatio / viewRatio
+                 scaleY = 1f
+             } else {
+                 scaleX = 1f
+                 scaleY = viewRatio / targetRatio
+             }
+        }
+        
         matrix.setScale(scaleX, scaleY, viewW / 2f, viewH / 2f)
         tv.setTransform(matrix)
     }
 
-    LaunchedEffect(aspectMode, customAspectX, customAspectY, videoWidth, videoHeight) { updateTexture() }
-
+    // 3️⃣ LAUNCHED EFFECT (TRIGGER)
+    LaunchedEffect(aspectRatio, videoWidth, videoHeight, customAspectInput) { 
+        applyAspectRatio() 
+    }
 
     // ============================================================================================
-    // VIEW HIERARCHY (BOX -> VIDEO -> TOUCH -> CONTROLS)
+    // VIEW HIERARCHY
     // ============================================================================================
 
-    Box(
-        modifier = Modifier.fillMaxSize().background(VideoBg)
-    ) {
+    Box(Modifier.fillMaxSize().background(VideoBg)) {
         // [1] VIDEO LAYER
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -254,11 +435,11 @@ fun PlayerScreen(
                             }
                             engine.attachSurface(managedSurface!!)
                             engine.play(uri)
-                            updateTexture()
+                            applyAspectRatio()
                         }
                         override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
-                            st.setDefaultBufferSize(w, h)
-                            updateTexture()
+                            // Update logic handles strict checks, okay to call
+                            applyAspectRatio()
                         }
                         override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
                             engine.detachSurface()
@@ -280,8 +461,9 @@ fun PlayerScreen(
                             lastInteractionTime = System.currentTimeMillis()
                             controlsVisible = !controlsVisible
                             if (!controlsVisible) { showSettings = false; showDiagnostics = false }
+                            focusManager.clearFocus() 
                         },
-                        onDoubleTap = { /* Seek feedback or Fullscreen logic here */ }
+                        onDoubleTap = { /* Seek feedback */ }
                     )
                 }
                 .pointerInput(isLocked) {
@@ -342,7 +524,7 @@ fun PlayerScreen(
                 }
         )
 
-        // VISUAL FEEDBACK (Gestures)
+        // VISUAL FEEDBACK
         if (gestureAction != null) {
             Box(Modifier.align(Alignment.Center).background(Color.Black.copy(0.7f), RoundedCornerShape(16.dp)).padding(24.dp)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -402,7 +584,6 @@ fun PlayerScreen(
                     
                     Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 24.dp, vertical = 24.dp)) {
                         
-                        // TIME & SCRUBBER
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(formatTime(positionMs), color = Color.White.copy(0.8f))
                             Text(formatTime(durationMs), color = Color.White.copy(0.8f))
@@ -420,7 +601,7 @@ fun PlayerScreen(
                         
                         Spacer(Modifier.height(24.dp))
                         
-                        // GLASS CONTROL DECK (FLOATING PILL)
+                        // GLASS CONTROL DECK
                         Box(
                             Modifier.align(Alignment.CenterHorizontally)
                                 .clip(RoundedCornerShape(32.dp))
@@ -430,18 +611,20 @@ fun PlayerScreen(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                                 
-                                // Aspect Ratio
+                                // Aspect Toggle (Cyclic) - Quick Switch
                                 IconButton(onClick = { 
-                                    val modes = AspectMode.values()
-                                    aspectMode = modes[(aspectMode.ordinal + 1) % modes.size]
+                                     aspectRatio = when(aspectRatio) {
+                                         AspectRatio.Fit -> AspectRatio.Fill
+                                         AspectRatio.Fill -> AspectRatio.Crop
+                                         AspectRatio.Crop -> AspectRatio.Stretch
+                                         else -> AspectRatio.Fit
+                                     }
                                 }) { Icon(Icons.Rounded.AspectRatio, "Aspect", tint = Color.White) }
 
-                                // Prev
                                 SpringIconButton(onClick = { 
                                      engine.seekTo((engine.currentPositionMs - 10000).coerceAtLeast(0))
                                 }, icon = Icons.Rounded.Replay10)
 
-                                // Play/Pause (Large)
                                 SpringIconButton(
                                     onClick = { 
                                         lastInteractionTime = System.currentTimeMillis()
@@ -451,12 +634,10 @@ fun PlayerScreen(
                                     size = 48.dp
                                 )
 
-                                // Next
                                 SpringIconButton(onClick = { 
                                     engine.seekTo((engine.currentPositionMs + 10000).coerceAtMost(durationMs)) 
                                 }, icon = Icons.Rounded.Forward10)
 
-                                // Diagnostics
                                 IconButton(onClick = { showDiagnostics = !showDiagnostics }) { 
                                     Icon(Icons.Rounded.Info, "Infos", tint = Color.White.copy(0.7f)) 
                                 }
@@ -467,21 +648,19 @@ fun PlayerScreen(
             }
         }
 
-        // [4] OVERLAYS (DIAGNOSTICS & SETTINGS)
-        
-        // Settings (Vertical Slide Up)
+        // [4] SETTINGS OVERLAY
         AnimatedVisibility(
             visible = showSettings,
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter) // Bottom Sheet Style
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
              Box(Modifier.fillMaxSize().background(Color.Black.copy(0.4f)).clickable{showSettings=false}, contentAlignment = Alignment.BottomCenter) {
                  Column(
                      Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart=24.dp, topEnd=24.dp))
                         .background(GlassGradient)
                         .border(1.dp, GlassBorder, RoundedCornerShape(topStart=24.dp, topEnd=24.dp))
-                        .clickable(enabled=false){}
+                        .clickable(enabled=false){} // consume click
                         .padding(32.dp)
                  ) {
                      Text("Settings", style = MaterialTheme.typography.headlineMedium, color = Color.White)
@@ -496,28 +675,64 @@ fun PlayerScreen(
                              )
                          }
                      }
-                     SettingRow("Aspect Ratio") {
-                         AspectMode.values().take(4).forEach { mode ->
-                              FilterChip(
-                                selected = aspectMode == mode, onClick = { aspectMode = mode },
-                                label = { Text(mode.name) },
+                     
+                     SettingRow("Aspect Ratio Preset") {
+                          val presets = listOf(AspectRatio.Fit, AspectRatio.Fill, AspectRatio.Crop, AspectRatio.Original, AspectRatio.Stretch)
+                          presets.forEach { mode ->
+                               FilterChip(
+                                selected = aspectRatio::class == mode::class, onClick = { aspectRatio = mode },
+                                label = { Text(mode.label) },
+                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor=Color.White, containerColor=Color.Transparent, labelColor=Color.White, selectedLabelColor=Color.Black)
+                             )
+                          }
+                     }
+                     
+                     // Custom Input Row
+                     Text("Custom Ratio", color = Color.Gray, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top=8.dp))
+                     Row(Modifier.fillMaxWidth().padding(top=8.dp), verticalAlignment = Alignment.CenterVertically) {
+                         OutlinedTextField(
+                            value = customAspectInput,
+                            onValueChange = { customAspectInput = it },
+                            placeholder = { Text("e.g. 16:9, 2.39, 1920x1080", color=Color.Gray) },
+                            textStyle = TextStyle(color=Color.White),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                aspectRatio = parseAspectRatio(customAspectInput)
+                                focusManager.clearFocus()
+                            }),
+                            modifier = Modifier.weight(1f).border(1.dp, Color.White.copy(0.3f), RoundedCornerShape(8.dp)),
+                            colors = TextFieldDefaults.outlinedTextFieldColors(
+                                focusedBorderColor = Color.Transparent, 
+                                unfocusedBorderColor = Color.Transparent,
+                                containerColor = Color.Transparent
+                            )
+                         )
+                         Spacer(Modifier.width(16.dp))
+                         GlassButton(
+                            onClick = { 
+                                aspectRatio = parseAspectRatio(customAspectInput)
+                                focusManager.clearFocus() 
+                            }, 
+                            icon = Icons.Rounded.Check
+                         )
+                     }
+                     // Quick Common
+                     Row(Modifier.padding(top=8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                         listOf(AspectRatio.Custom.SixteenNine, AspectRatio.Custom.TwentyOneNine, AspectRatio.Custom.FourThree).forEach { preset ->
+                             FilterChip(
+                                selected = aspectRatio == preset, onClick = { aspectRatio = preset; customAspectInput = preset.label },
+                                label = { Text(preset.label) },
                                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor=Color.White, containerColor=Color.Transparent, labelColor=Color.White, selectedLabelColor=Color.Black)
                              )
                          }
                      }
-                     // Custom Aspect Input
-                     Row(verticalAlignment=Alignment.CenterVertically) {
-                         Text("Custom:", color=Color.Gray, modifier=Modifier.padding(end=8.dp))
-                         // Simple preset toggler for now as TextFields are tricky in this overlay
-                         FilterChip(selected = aspectMode == AspectMode.CUSTOM && customAspectX == 21f, onClick={ aspectMode=AspectMode.CUSTOM; customAspectX=21f; customAspectY=9f}, label={Text("21:9")}, colors=FilterChipDefaults.filterChipColors(selectedContainerColor=Color.White, containerColor=Color.Transparent, labelColor=Color.White, selectedLabelColor=Color.Black))
-                         Spacer(Modifier.width(8.dp))
-                         FilterChip(selected = aspectMode == AspectMode.CUSTOM && customAspectX == 4f, onClick={ aspectMode=AspectMode.CUSTOM; customAspectX=4f; customAspectY=3f}, label={Text("4:3")}, colors=FilterChipDefaults.filterChipColors(selectedContainerColor=Color.White, containerColor=Color.Transparent, labelColor=Color.White, selectedLabelColor=Color.Black))
-                     }
+                     Spacer(Modifier.height(200.dp)) // Keyboard space
                  }
              }
         }
         
-        // Diagnostics (Right Slide)
+        // Diagnostics
         AnimatedVisibility(
             visible = showDiagnostics,
             enter = slideInHorizontally { it } + fadeIn(),
@@ -534,7 +749,7 @@ fun PlayerScreen(
                     DiagnosticItem("FPS", String.format("%.1f", outputFps))
                     DiagnosticItem("Drops", droppedFrames.toString())
                     DiagnosticItem("Audio Clock", "${audioClockUs/1000} ms")
-                    DiagnosticItem("Audio Codec", "Native / AAudio") // Placeholder
+                    DiagnosticItem("Aspect State", aspectRatio.label)
                 }
             }
         }
@@ -547,57 +762,35 @@ fun PlayerScreen(
 
 @Composable
 fun PhantomScrubber(value: Float, onValueChange: (Float) -> Unit, onCommit: () -> Unit) {
-    var isHovering by remember { mutableStateOf(false) } // Touch down
+    var isHovering by remember { mutableStateOf(false) } 
     val height by animateDpAsState(if (isHovering) 12.dp else 4.dp, label = "scrubberHeight")
     
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(32.dp) // Large touch target
-            .pointerInput(Unit) {
+        modifier = Modifier.fillMaxWidth().height(32.dp).pointerInput(Unit) {
                 detectTapGestures(
-                    onPress = { 
-                        isHovering = true
-                        tryAwaitRelease()
-                        isHovering = false 
-                        onCommit()
-                    }
+                    onPress = { isHovering=true; tryAwaitRelease(); isHovering=false; onCommit() }
                 )
-            }
-            .pointerInput(Unit) {
+            }.pointerInput(Unit) {
                  detectHorizontalDragGestures(
                     onDragStart = { isHovering = true },
                     onDragEnd = { isHovering = false; onCommit() },
-                    onHorizontalDrag = { change, _ ->
-                        val newPos = (change.position.x / size.width).coerceIn(0f, 1f)
-                        onValueChange(newPos)
-                    }
+                    onHorizontalDrag = { change, _ -> onValueChange((change.position.x / size.width).coerceIn(0f, 1f)) }
                 )
             },
         contentAlignment = Alignment.CenterStart
     ) {
-        // Track
         Box(Modifier.fillMaxWidth().height(height).clip(RoundedCornerShape(4.dp)).background(Color.White.copy(0.3f)))
-        // Fill
-        Box(Modifier.fillMaxWidth(value).height(height).clip(RoundedCornerShape(4.dp)).background(Color.Red)) // Netflix Red
+        Box(Modifier.fillMaxWidth(value).height(height).clip(RoundedCornerShape(4.dp)).background(Color.Red))
     }
 }
 
 @Composable
-fun SpringIconButton(
-    onClick: () -> Unit, 
-    icon: androidx.compose.ui.graphics.vector.ImageVector, 
-    size: Dp = 24.dp
-) {
+fun SpringIconButton(onClick: () -> Unit, icon: androidx.compose.ui.graphics.vector.ImageVector, size: Dp = 24.dp) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(if (isPressed) 0.8f else 1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow), label = "spring")
-    
     IconButton(onClick = onClick, interactionSource = interactionSource) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(size).graphicsLayer {
-            scaleX = scale
-            scaleY = scale
-        })
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(size).graphicsLayer { scaleX=scale; scaleY=scale })
     }
 }
 
@@ -612,9 +805,7 @@ fun GlassButton(onClick: () -> Unit, icon: androidx.compose.ui.graphics.vector.I
 fun SettingRow(label: String, content: @Composable () -> Unit) {
     Column(Modifier.padding(vertical=8.dp)) {
         Text(label, color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-        Row(Modifier.fillMaxWidth().padding(top=8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            content()
-        }
+        Row(Modifier.fillMaxWidth().padding(top=8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { content() }
     }
 }
 
@@ -647,7 +838,7 @@ private fun getResolutionLabel(height: Int): String {
 @Composable
 fun OutlinedSubtitleText(text: String, fontSizeSp: Float, textColor: Color, outlineColor: Color, outlineWidthDp: Float) {
     Box {
-        Text(text = text, color = outlineColor, textAlign = TextAlign.Center, fontSize = fontSizeSp.sp, style = TextStyle(drawStyle = androidx.compose.ui.graphics.drawscope.Stroke(width = outlineWidthDp)))
-        Text(text = text, color = textColor, textAlign = TextAlign.Center, fontSize = fontSizeSp.sp)
+        Text(text, color = outlineColor, textAlign = TextAlign.Center, fontSize = fontSizeSp.sp, style = TextStyle(drawStyle = androidx.compose.ui.graphics.drawscope.Stroke(width = outlineWidthDp)))
+        Text(text, color = textColor, textAlign = TextAlign.Center, fontSize = fontSizeSp.sp)
     }
 }
