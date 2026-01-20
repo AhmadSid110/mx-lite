@@ -8,16 +8,14 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.Surface
+import com.mxlite.player.decoder.VideoDecoder
 import java.io.FileDescriptor
 import kotlin.math.min
 
-class MediaCodecEngine(
+class HwVideoDecoder(
     private val context: Context,
     private val clock: PlaybackClock
-) : PlayerEngine {
-
-    override val currentUri: Uri?
-        get() = null
+) : VideoDecoder {
 
     private var extractor: MediaExtractor? = null
     private var codec: MediaCodec? = null
@@ -46,7 +44,7 @@ class MediaCodecEngine(
     override var durationMs: Long = 0
         private set
 
-    override val currentPositionMs: Long
+    val currentPositionMs: Long
         get() = NativePlayer.virtualClockUs() / 1000
 
     // 🔒 STATE LOGIC FIX: Playback = Enabled + Active Thread
@@ -225,7 +223,7 @@ class MediaCodecEngine(
                         MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                             // 🏁 RULE 7: Required by some GPUs for rendering
                             val newFormat = codec?.outputFormat
-                            Log.d("MediaCodecEngine", "RULE 7: Format changed: $newFormat")
+                            Log.d("HwVideoDecoder", "RULE 7: Format changed: $newFormat")
                         }
                         MediaCodec.INFO_TRY_AGAIN_LATER -> {
                             // No-op
@@ -233,14 +231,14 @@ class MediaCodecEngine(
                         else -> if (outIndex >= 0) {
                             // 🏁 RULE 6: Log once to confirm buffer production
                             if (lastRenderedPtsUs == Long.MIN_VALUE) {
-                                Log.d("MediaCodecEngine", "RULE 6: First buffer produced at index $outIndex")
+                                Log.d("HwVideoDecoder", "RULE 6: First buffer produced at index $outIndex")
                             }
                             handleVideoFrame(outIndex, info)
                         }
                     }
 
                 } catch (e: Exception) {
-                    Log.e("MediaCodecEngine", "Decode loop error", e)
+                    Log.e("HwVideoDecoder", "Decode loop error", e)
                 }
             }
         }.apply { start() }
@@ -250,9 +248,19 @@ class MediaCodecEngine(
     // 🟢 PUBLIC API
     // =========================================================================
 
-    fun play(fd: FileDescriptor) {
+    override fun prepare(fd: FileDescriptor, surface: Surface) {
+        attachSurface(surface)
+        playInternal(fd)
+        pause() // start paused
+    }
+
+    override fun play() {
+        resume()
+    }
+
+    private fun playInternal(fd: FileDescriptor) {
         if (!hasSurface()) {
-            Log.e("MediaCodecEngine", "play() ABORT: Surface not ready/valid")
+            Log.e("HwVideoDecoder", "play() ABORT: Surface not ready/valid")
             return
         }
         releaseResources()
@@ -298,7 +306,7 @@ class MediaCodecEngine(
                 
                 // 🕵️ RULE 8: Verify Color Format is Surface-compatible
                 val colorFormat = outputFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT)
-                Log.d("MediaCodecEngine", "RULE 8: Decoder started with ColorFormat=$colorFormat")
+                Log.d("HwVideoDecoder", "RULE 8: Decoder started with ColorFormat=$colorFormat")
                 
                 // Expose Dimensions
                 videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
@@ -324,25 +332,12 @@ class MediaCodecEngine(
         }
     }
 
-    override fun play(uri: Uri) {
-        // Rule S3: MUST NOT call release() which clears surface
-        stop()
-        try {
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return
-            currentPfd = pfd
-            play(pfd.fileDescriptor)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            stop()
-        }
-    }
-
     override fun pause() {
         renderEnabled = false
         decodeEnabled = false
     }
 
-    override fun resume() {
+    fun resume() {
         decodeEnabled = true
         renderEnabled = true
     }
@@ -384,7 +379,7 @@ class MediaCodecEngine(
                     videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
                 }
             } catch (e: Exception) {
-                Log.e("MediaCodecEngine", "Failed to recreate codec in seekTo", e)
+                Log.e("HwVideoDecoder", "Failed to recreate codec in seekTo", e)
             }
         }
 
@@ -394,7 +389,7 @@ class MediaCodecEngine(
 
     // 🔒 FIX: RACE-PROOF SEEK PREVIEW
     // Temporarily gates decode and uses lock to ensure safe atomic Preview
-    override fun onSeekPreview(positionMs: Long) {
+    fun onSeekPreview(positionMs: Long) {
         // UI-only update. NO video decode.
     }
 
@@ -423,7 +418,7 @@ class MediaCodecEngine(
         extractor = null
 
         currentPfd?.fileDescriptor?.let { fd ->
-            if (hasSurface()) play(fd)
+            if (hasSurface()) playInternal(fd)
         }
     }
 
@@ -495,8 +490,6 @@ class MediaCodecEngine(
     }
 
     // Unused / Deprecated
-    override fun onSeekStart() { }
-    override fun onSeekCommit(positionMs: Long) { }
-    @Deprecated("Use seekTo(positionMs)")
-    fun seekToAudioClock() { }
+    fun onSeekStart() { }
+    fun onSeekCommit(positionMs: Long) { }
 }

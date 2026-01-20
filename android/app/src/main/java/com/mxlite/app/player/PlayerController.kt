@@ -5,6 +5,7 @@ import android.net.Uri
 import android.view.Surface
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.mxlite.player.decoder.VideoDecoder
 
 class PlayerController(
     private val context: Context
@@ -16,7 +17,8 @@ class PlayerController(
             get() = NativePlayer.virtualClockUs() / 1000
     }
 
-    private val video = MediaCodecEngine(context, masterClock)
+    private var videoDecoder: VideoDecoder? = null
+    private var currentSurface: Surface? = null
     
     // Audio FD management
     private var audioPfd: ParcelFileDescriptor? = null
@@ -50,19 +52,19 @@ class PlayerController(
         get() = playbackState == PlaybackState.PLAYING
 
     override val videoWidth: Int
-        get() = video.videoWidth
+        get() = videoDecoder?.videoWidth ?: 0
 
     override val videoHeight: Int
-        get() = video.videoHeight
+        get() = videoDecoder?.videoHeight ?: 0
 
     override val decoderName: String
-        get() = video.decoderName
+        get() = videoDecoder?.decoderName ?: "None"
         
     override val outputFps: Float
-        get() = video.outputFps
+        get() = videoDecoder?.outputFps ?: 0f
         
     override val droppedFrames: Int
-        get() = video.droppedFrames
+        get() = videoDecoder?.droppedFrames ?: 0
 
     // =========================================================================
     // 🟢 PUBLIC ENTRY POINTS
@@ -88,14 +90,22 @@ class PlayerController(
             NativePlayer.playFd(pfd.fd, 0L, -1)
             hasAudio = NativePlayer.dbgHasAudioTrack()
             
-            // 4. Start Video Engine (Starts PAUSED)
-            video.play(uri)
-
-            // 🔒 CRITICAL FIX: INITIAL HANDSHAKE
-            // START CLOCK FIRST
-            NativePlayer.nativeResume()
-            // THEN open video gates
-            video.resume()
+            // 4. Start Video Engine
+            val surface = currentSurface
+            if (surface != null) {
+                val decoder = HwVideoDecoder(context, masterClock)
+                videoDecoder = decoder
+                decoder.prepare(pfd.fileDescriptor, surface)
+                
+                // 🔒 CRITICAL FIX: INITIAL HANDSHAKE
+                // START CLOCK FIRST
+                NativePlayer.nativeResume()
+                // THEN open video gates
+                decoder.play()
+            } else {
+                Log.w("PlayerController", "play() called without surface")
+                NativePlayer.nativeResume()
+            }
             
             playbackState = PlaybackState.PLAYING
 
@@ -111,14 +121,14 @@ class PlayerController(
         
         // 🔒 Direct pass-through
         NativePlayer.nativePause()
-        video.pause()
+        videoDecoder?.pause()
     }
 
     override fun resume() {
         if (playbackState == PlaybackState.STOPPED) return
         
         // 🔒 Resume logic
-        video.resume()
+        videoDecoder?.play()
         NativePlayer.nativeResume()
         playbackState = PlaybackState.PLAYING
     }
@@ -129,7 +139,7 @@ class PlayerController(
         playbackState = PlaybackState.STOPPED
 
         NativePlayer.release()   // Audio + clock
-        video.stop()             // Video only
+        videoDecoder?.stop()             // Video only
 
         try { audioPfd?.close() } catch (_: Exception) {}
         audioPfd = null
@@ -146,22 +156,22 @@ class PlayerController(
         playbackState = PlaybackState.DRAGGING
 
         NativePlayer.nativePause()
-        video.pause()
+        videoDecoder?.pause()
     }
 
     override fun onSeekPreview(positionMs: Long) { // Drag Move
         if (playbackState != PlaybackState.DRAGGING) return
-        video.onSeekPreview(positionMs)
+        videoDecoder?.seekTo(positionMs) // Mapping preview to seekTo for now
     }
 
     override fun onSeekCommit(positionMs: Long) { // Drag End
         if (playbackState != PlaybackState.DRAGGING) return
 
         NativePlayer.nativeSeek(positionMs * 1000L)
-        video.seekTo(positionMs)
+        videoDecoder?.seekTo(positionMs)
 
         if (wasPlayingBeforeDrag) {
-            video.resume()
+            videoDecoder?.play()
             NativePlayer.nativeResume()
             playbackState = PlaybackState.PLAYING
         } else {
@@ -175,11 +185,11 @@ class PlayerController(
         if (playbackState == PlaybackState.DRAGGING) return
 
         NativePlayer.nativeSeek(positionMs * 1000L)
-        video.seekTo(positionMs)
+        videoDecoder?.seekTo(positionMs)
         
         // 🔒 FIX #3: Re-open gates if we are playing
         if (playbackState == PlaybackState.PLAYING) {
-            video.resume()
+            videoDecoder?.play()
         }
     }
 
@@ -188,33 +198,36 @@ class PlayerController(
     // =========================================================================
 
     override fun attachSurface(surface: Surface) {
-        video.attachSurface(surface)
+        currentSurface = surface
+        videoDecoder?.attachSurface(surface)
         if (playbackState != PlaybackState.STOPPED) {
-             video.recreateVideo()
+             videoDecoder?.recreateVideo()
              
              // 🔒 FIX #1: RESTORE GATES
              // If we were playing, we MUST re-enable the render gate
              // after the surface-triggered recreateVideo().
              if (playbackState == PlaybackState.PLAYING) {
-                 video.resume()
+                 videoDecoder?.play()
              }
         }
     }
 
     override fun detachSurface() {
-        video.detachSurface()
+        currentSurface = null
+        videoDecoder?.detachSurface()
     }
 
     override fun recreateVideo() {
         if (currentUri == null) return
-        video.recreateVideo()
+        videoDecoder?.recreateVideo()
     }
 
     override fun release() {
         playbackState = PlaybackState.STOPPED
         
         NativePlayer.release()
-        video.release()
+        videoDecoder?.release()
+        videoDecoder = null
         
         try { audioPfd?.close() } catch (_: Exception) {}
         audioPfd = null
