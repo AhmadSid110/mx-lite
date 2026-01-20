@@ -92,8 +92,16 @@ class PlayerController(
             
             // 4. Start Video Engine
             val surface = currentSurface
-            if (surface != null) {
-                val decoder = HwVideoDecoder(context, masterClock)
+            if (surface != null && surface.isValid) {
+                // TEMPORARY: Switch for Phase 2.1
+                val useHwDecoder = true
+                
+                val decoder: VideoDecoder = if (useHwDecoder) {
+                    HwVideoDecoder(context, masterClock)
+                } else {
+                    com.mxlite.player.decoder.sw.SwVideoDecoder()
+                }
+                
                 videoDecoder = decoder
                 decoder.prepare(pfd.fileDescriptor, surface)
                 
