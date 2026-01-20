@@ -460,7 +460,7 @@ fun PlayerScreen(
                     detectTapGestures(
                         onTap = { 
                             val now = System.currentTimeMillis()
-                            if (now - lastTapTime < 300) {
+                            if (now - lastTapTime < 500) {
                                 tapCount++
                             } else {
                                 tapCount = 1
@@ -473,8 +473,11 @@ fun PlayerScreen(
                             } else {
                                 lastInteractionTime = System.currentTimeMillis()
                                 controlsVisible = !controlsVisible
-                                if (!controlsVisible) { showSettings = false; showDiagnostics = false }
-                                focusManager.clearFocus() 
+                                if (!controlsVisible) {
+                                    showSettings = false
+                                    showDiagnostics = false
+                                }
+                                focusManager.clearFocus()
                             }
                         },
                         onDoubleTap = { /* Seek feedback */ }
@@ -730,18 +733,40 @@ fun PlayerScreen(
                             }, 
                             icon = Icons.Rounded.Check
                          )
-                     }
-                     // Quick Common
-                     Row(Modifier.padding(top=8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                         listOf(AspectRatio.Custom.SixteenNine, AspectRatio.Custom.TwentyOneNine, AspectRatio.Custom.FourThree).forEach { preset ->
-                             FilterChip(
-                                selected = aspectRatio == preset, onClick = { aspectRatio = preset; customAspectInput = preset.label },
-                                label = { Text(preset.label) },
-                                colors = FilterChipDefaults.filterChipColors(selectedContainerColor=Color.White, containerColor=Color.Transparent, labelColor=Color.White, selectedLabelColor=Color.Black)
-                             )
-                         }
-                     }
-                     Spacer(Modifier.height(200.dp)) // Keyboard space
+                      }
+                      // Quick Common
+                      Row(Modifier.padding(top=8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                          listOf(AspectRatio.Custom.SixteenNine, AspectRatio.Custom.TwentyOneNine, AspectRatio.Custom.FourThree).forEach { preset ->
+                              FilterChip(
+                                 selected = aspectRatio == preset, onClick = { aspectRatio = preset; customAspectInput = preset.label },
+                                 label = { Text(preset.label) },
+                                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor=Color.White, containerColor=Color.Transparent, labelColor=Color.White, selectedLabelColor=Color.Black)
+                              )
+                          }
+                      }
+
+                      HorizontalDivider(Modifier.padding(vertical = 16.dp), color = Color.White.copy(0.1f))
+
+                      SettingRow("Developer Tools") {
+                          Button(
+                              onClick = { engine.switchDecoder() },
+                              colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.1f))
+                          ) {
+                              Icon(Icons.Rounded.DeveloperMode, null, tint = Color.White)
+                              Spacer(Modifier.width(8.dp))
+                              Text("Switch Decoder (HW/SW)", color = Color.White)
+                          }
+                          
+                          Button(
+                              onClick = { showDiagnostics = !showDiagnostics; showSettings = false },
+                              colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(0.1f))
+                          ) {
+                              Icon(Icons.Rounded.Analytics, null, tint = Color.White)
+                              Spacer(Modifier.width(8.dp))
+                              Text("Diagnostics", color = Color.White)
+                          }
+                      }
+                      Spacer(Modifier.height(100.dp))
                  }
              }
         }
