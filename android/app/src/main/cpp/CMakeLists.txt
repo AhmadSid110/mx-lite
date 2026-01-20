@@ -26,3 +26,23 @@ target_link_libraries(
     mediandk
     aaudio
 )
+
+# Phase 2.3: Software Decoder Implementation
+add_library(
+    mxlite-swdecoder
+    SHARED
+    swdecoder/NativeSwDecoder.cpp
+    swdecoder/NativeSwDecoder_jni.cpp
+)
+
+target_include_directories(
+    mxlite-swdecoder
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/swdecoder
+)
+
+target_link_libraries(
+    mxlite-swdecoder
+    ${log-lib}
+    android
+)
